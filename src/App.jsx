@@ -11,7 +11,7 @@ import {
   onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
-  collection, doc, setDoc, getDoc, getFirestore,
+  collection, doc, setDoc, getDoc, initializeFirestore,
   onSnapshot, query, getDocs, where, deleteDoc
 } from 'firebase/firestore';
 
@@ -28,7 +28,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app); // ใช้การตั้งค่ามาตรฐานของ Firebase เพื่อความเสถียรที่สุด
+
+// 🔴 แก้ปัญหาโหลดค้างจากเน็ตโรงเรียนบล็อก (บังคับใช้ Long Polling)
+const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true 
+});
 
 const APP_ID = 'src-pa-hub-v1';
 
@@ -239,7 +243,6 @@ function Login({ showToast, closeToast }) {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // บังคับปิดกล่องข้อความที่อาจค้างอยู่เมื่อเข้ามาหน้า Login
   useEffect(() => { closeToast(); }, []);
 
   const handleLogin = async (e) => {
@@ -276,7 +279,7 @@ function Login({ showToast, closeToast }) {
              else { showToast('บัญชีนี้ไม่ได้รับอนุญาต: ผู้ดูแลระบบยังไม่ได้เพิ่มอีเมลของคุณเข้าระบบ', 'error'); }
           }
         } catch (dbErr) {
-          showToast('ข้อผิดพลาดการเชื่อมต่อฐานข้อมูล (โปรดตรวจสอบ Firestore)', 'error');
+          showToast('ข้อผิดพลาดฐานข้อมูล: ' + dbErr.message, 'error');
         }
       } else { 
         showToast('เกิดข้อผิดพลาด: ' + err.message, 'error'); 
@@ -917,7 +920,6 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
     } catch (err) { 
       showToast(err.message, 'error'); 
     } finally {
-      // ให้หน้าต่างโหลดปิดเสมอไม่ว่าจะสำเร็จหรือมีข้อผิดพลาด
       if (editFormData === null) closeToast(); 
     }
   };
@@ -935,7 +937,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
     finally { setIsUploadingPhoto(false); }
   };
 
-  // ปรับปรุงฟังก์ชันนำเข้าข้อมูล เพิ่มคอลัมน์ ครูที่ปรึกษา(ชั้น) และ ห้อง
+  // นำเข้าข้อมูลผ่าน Excel ที่รองรับ ครูที่ปรึกษา และ ห้อง
   const processImport = async () => {
     if (!importText.trim()) { showToast('กรุณาวางข้อมูลก่อน', 'error'); return; }
     showToast('กำลังนำเข้าข้อมูล...', 'loading');
@@ -947,7 +949,6 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
       const cols = rows[i].split(separator).map(c => c.trim().replace(/^"|"$/g, '')); 
       if (cols.length < 6) continue; 
       
-      // เพิ่มการดึงข้อมูล 9 คอลัมน์
       const [email, password, title, firstName, lastName, standing, department, advisorGrade, advisorRoom] = cols;
       const targetUser = users.find(u => u.email.toLowerCase() === email.toLowerCase());
 
