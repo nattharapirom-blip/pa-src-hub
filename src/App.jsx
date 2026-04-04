@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, CheckSquare, FileText, User, Settings, LogOut, 
   Menu, X, Upload, Save, FileSpreadsheet, Briefcase, BarChart, 
@@ -11,8 +11,8 @@ import {
   onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
-  collection, doc, setDoc, getDoc, initializeFirestore,
-  onSnapshot, query, getDocs, where, deleteDoc
+  collection, doc, setDoc, getDoc, getFirestore,
+  onSnapshot, query, getDocs, deleteDoc
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -28,11 +28,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-
-// 🔴 แก้ปัญหาโหลดค้างจากเน็ตโรงเรียนบล็อก (บังคับใช้ Long Polling)
-const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true 
-});
+const db = getFirestore(app);
 
 const APP_ID = 'src-pa-hub-v1';
 
@@ -129,6 +125,10 @@ export default function App() {
         .glass-panel, .glass-input { background: white !important; backdrop-filter: none !important; border: 1px solid #ccc !important; box-shadow: none !important; color: black !important; }
         .no-print { display: none !important; }
       }
+      .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 10px; }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.3); }
     `;
     document.head.appendChild(style);
     return () => document.head.removeChild(style);
@@ -163,6 +163,7 @@ export default function App() {
     }
   };
 
+  // ดึงการตั้งค่าระบบ
   useEffect(() => {
     const unsubSettings = onSnapshot(getDocRef('settings', 'system'), (docSnap) => {
       if (docSnap.exists()) { setAppSettings(prev => ({ ...prev, ...docSnap.data() })); } 
@@ -171,6 +172,7 @@ export default function App() {
     return () => unsubSettings();
   }, []);
 
+  // ระบบตรวจสอบและสร้างโปรไฟล์ (แก้บั๊กลูปค้าง 100%)
   useEffect(() => {
     let profileUnsub;
     let usersUnsub;
@@ -178,47 +180,54 @@ export default function App() {
     const authUnsub = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        setProfile(prev => prev || { uid: currentUser.uid, email: currentUser.email, firstName: 'กำลังโหลด...', roles: { teacher: true, supervisor: false, admin: false } });
-
         const userRef = getDocRef('users', currentUser.uid);
-        profileUnsub = onSnapshot(userRef, async (userSnap) => {
-          if (userSnap.exists()) {
-            setProfile(userSnap.data());
-          } else {
-            let newProfile = null;
-            try {
-              const preUsersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users');
-              const q = query(preUsersRef, where("email", "==", currentUser.email.toLowerCase()));
-              const querySnapshot = await getDocs(q);
-              if (!querySnapshot.empty) {
-                const preUserDoc = querySnapshot.docs[0];
-                const preData = preUserDoc.data();
-                delete preData.password;
-                newProfile = { ...preData, uid: currentUser.uid };
-                await deleteDoc(preUserDoc.ref);
-              }
-            } catch (err) {}
 
-            if (!newProfile) {
-              let isFirstUser = false;
-              try { const usersSnap = await getDocs(query(getColl('users'))); isFirstUser = usersSnap.empty; } catch (e) {}
-              newProfile = {
-                uid: currentUser.uid, email: currentUser.email, firstName: '', lastName: '', title: '',
-                position: 'ครู', standing: 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: '', advisorGrade: '', advisorRoom: '', salary: '', photoUrl: '',
-                roles: { teacher: true, supervisor: false, admin: isFirstUser }, supervisorTasks: [], supervisorTitle: ''
-              };
+        try {
+          // 1. ตรวจสอบก่อนว่ามีโปรไฟล์ในระบบหรือยัง (ทำแค่ครั้งเดียว ไม่เกิดลูป)
+          const docSnap = await getDoc(userRef);
+          
+          if (!docSnap.exists()) {
+            // ถ้ายังไม่มีโปรไฟล์ (เพิ่งล็อกอินครั้งแรก) ให้ดึงข้อมูลที่แอดมินนำเข้ามารอไว้ (pre_users)
+            let newProfile = {
+              uid: currentUser.uid, email: currentUser.email, firstName: '', lastName: '', title: '',
+              position: 'ครู', standing: 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: '', advisorGrade: '', advisorRoom: '', salary: '', photoUrl: '',
+              roles: { teacher: true, supervisor: false, admin: false }, supervisorTasks: [], supervisorTitle: ''
+            };
+
+            const preUsersSnap = await getDocs(getColl('pre_users'));
+            const preUserData = preUsersSnap.docs.find(d => d.data().email === currentUser.email.toLowerCase());
+
+            if (preUserData) {
+              const data = preUserData.data();
+              newProfile = { ...newProfile, ...data, roles: data.roles || newProfile.roles };
+              delete newProfile.password; // ไม่บันทึกรหัสผ่านลงในโปรไฟล์
+              await deleteDoc(preUserData.ref); // ลบออกจากกล่องรอ
+            } else {
+              // เช็คว่าเป็นคนแรกของระบบหรือไม่ ถ้าใช่ให้เป็น Admin
+              const allUsers = await getDocs(getColl('users'));
+              if (allUsers.empty) newProfile.roles.admin = true;
             }
-            try { await setDoc(userRef, newProfile, { merge: true }); setProfile(newProfile); } catch (err) { setProfile(newProfile); }
-          }
-          setLoading(false);
-        }, (error) => { 
-          console.error("Firebase Snapshot Error:", error);
-          setLoading(false); 
-        });
 
-        usersUnsub = onSnapshot(query(getColl('users')), (snap) => {
-          const map = {}; snap.forEach(d => map[d.id] = d.data()); setUsersMap(map);
-        });
+            // บันทึกโปรไฟล์ใหม่
+            await setDoc(userRef, newProfile);
+          }
+
+          // 2. หลังจากเคลียร์โปรไฟล์เสร็จแล้ว ค่อยเริ่ม "ดักฟัง" การเปลี่ยนแปลงข้อมูล
+          profileUnsub = onSnapshot(userRef, (snap) => {
+            if (snap.exists()) setProfile(snap.data());
+            setLoading(false); // โหลดเสร็จสิ้น เข้าสู่หน้าหลักได้เลย
+          });
+
+          // 3. ดักฟังข้อมูลผู้ใช้ทั้งหมดเพื่อใช้แสดงชื่อ (ทำแบบเบาๆ ไม่ดึงลูป)
+          usersUnsub = onSnapshot(getColl('users'), (snap) => {
+            const map = {}; snap.forEach(d => map[d.id] = d.data()); setUsersMap(map);
+          });
+
+        } catch (error) {
+          console.error("Initialization Error:", error);
+          setLoading(false);
+          showToast('เกิดข้อผิดพลาดในการดึงข้อมูล โปรดรีเฟรชหน้าจอ', 'error');
+        }
 
       } else {
         setUser(null); setProfile(null); setLoading(false);
@@ -226,6 +235,7 @@ export default function App() {
         if (usersUnsub) usersUnsub();
       }
     });
+
     return () => { authUnsub(); if (profileUnsub) profileUnsub(); if (usersUnsub) usersUnsub(); };
   }, []);
 
@@ -243,6 +253,7 @@ function Login({ showToast, closeToast }) {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  // ปิดกล่องข้อความทันทีที่หน้า Login โหลดเสร็จ
   useEffect(() => { closeToast(); }, []);
 
   const handleLogin = async (e) => {
@@ -253,37 +264,26 @@ function Login({ showToast, closeToast }) {
 
     try {
       showToast('กำลังเข้าสู่ระบบ...', 'loading');
-      await signInWithEmailAndPassword(auth, email, password);
-      closeToast();
-    } catch (err) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        try {
-          const preUsersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users');
-          const qPre = query(preUsersRef, where("email", "==", email.toLowerCase()));
-          const snapPre = await getDocs(qPre);
-
-          if (!snapPre.empty) {
-            const preData = snapPre.docs[0].data();
-            if (preData.password && preData.password !== password) {
-              showToast('รหัสผ่านไม่ถูกต้อง หรือบัญชีนี้ยังไม่ได้รับอนุญาต', 'error');
-              setIsLoading(false);
-              return;
-            }
+      
+      try {
+        // 1. พยายามล็อกอินด้วยบัญชีที่มีอยู่
+        await signInWithEmailAndPassword(auth, email, password);
+        closeToast();
+      } catch (loginError) {
+        // 2. ถ้าไม่มีบัญชีในระบบ (user-not-found) ให้สร้างบัญชีใหม่ทันที!
+        if (loginError.code === 'auth/user-not-found' || loginError.code === 'auth/invalid-credential') {
+          try {
             await createUserWithEmailAndPassword(auth, email, password);
-            showToast('ลงทะเบียนครั้งแรกและเข้าสู่ระบบสำเร็จ', 'success');
-          } else {
-             const usersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'users');
-             const qUser = query(usersRef, where("email", "==", email.toLowerCase()));
-             const snapUser = await getDocs(qUser);
-             if (!snapUser.empty) { showToast('รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่', 'error'); } 
-             else { showToast('บัญชีนี้ไม่ได้รับอนุญาต: ผู้ดูแลระบบยังไม่ได้เพิ่มอีเมลของคุณเข้าระบบ', 'error'); }
+            showToast('ลงทะเบียนและเข้าสู่ระบบสำเร็จ', 'success');
+          } catch (createError) {
+            showToast('รหัสผ่านไม่ถูกต้อง หรือสร้างบัญชีไม่สำเร็จ', 'error');
           }
-        } catch (dbErr) {
-          showToast('ข้อผิดพลาดฐานข้อมูล: ' + dbErr.message, 'error');
+        } else {
+          throw loginError;
         }
-      } else { 
-        showToast('เกิดข้อผิดพลาด: ' + err.message, 'error'); 
       }
+    } catch (err) {
+      showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -302,7 +302,7 @@ function Login({ showToast, closeToast }) {
         </div>
         <form onSubmit={handleLogin} className="space-y-5">
           <div><label className="block text-sm font-bold text-gray-700 mb-1">ชื่อผู้ใช้งาน (Email โรงเรียน)</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="example@sriracha.ac.th" className="glass-input w-full px-4 py-3.5 rounded-xl transition-all shadow-sm focus:shadow-md font-bold" required disabled={isLoading} /></div>
-          <div><label className="block text-sm font-bold text-gray-700 mb-1">รหัสผ่าน (เบอร์โทรศัพท์ 10 หลัก)</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="กรอกรหัสผ่าน..." className="glass-input w-full px-4 py-3.5 rounded-xl transition-all shadow-sm focus:shadow-md font-bold" required disabled={isLoading} /></div>
+          <div><label className="block text-sm font-bold text-gray-700 mb-1">รหัสผ่าน</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="กรอกรหัสผ่าน..." className="glass-input w-full px-4 py-3.5 rounded-xl transition-all shadow-sm focus:shadow-md font-bold" required disabled={isLoading} /></div>
           <button type="submit" disabled={isLoading} className="w-full bg-gradient-to-r from-[#00529B] to-blue-700 hover:to-blue-800 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg mt-6 flex justify-center items-center transform hover:-translate-y-0.5">
             {isLoading ? <><Loader2 className="animate-spin mr-2" size={20} /> กำลังตรวจสอบสิทธิ์...</> : 'เข้าสู่ระบบ'}
           </button>
@@ -324,7 +324,7 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast, closeToas
     showToast('กำลังออกจากระบบ...', 'loading');
     try {
       await signOut(auth);
-      closeToast();
+      closeToast(); // บังคับปิดกล่องข้อความ
     } catch (error) {
       showToast(error.message, 'error');
     }
@@ -409,7 +409,7 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast, closeToas
             {activeTab === 'part1' && <TeacherPart1 profile={profile} appSettings={appSettings} showToast={showToast} closeToast={closeToast} />}
             {activeTab === 'part2' && <TeacherPart2 profile={profile} showToast={showToast} closeToast={closeToast} />}
             {activeTab === 'supervisor' && <SupervisorPanel profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} closeToast={closeToast} />}
-            {activeTab === 'admin' && <AdminPanel showToast={showToast} appSettings={appSettings} closeToast={closeToast} />}
+            {activeTab === 'admin' && <AdminPanel profile={profile} showToast={showToast} appSettings={appSettings} closeToast={closeToast} />}
           </div>
         </main>
       </div>
@@ -850,7 +850,7 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast, closeToast
   );
 }
 
-function AdminPanel({ showToast, appSettings, closeToast }) {
+function AdminPanel({ profile, showToast, appSettings, closeToast }) {
   const [users, setUsers] = useState([]);
   const [activeAdminTab, setActiveAdminTab] = useState('users'); 
   const [editingUser, setEditingUser] = useState(null);
@@ -863,12 +863,14 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
   const [importResult, setImportResult] = useState(null);
   const [settingsForm, setSettingsForm] = useState({ paYear: appSettings.paYear, newDept: '' });
 
+  // ดึงรายชื่อผู้ใช้ทั้งหมดมาแสดงให้ Admin
   useEffect(() => {
+    if (!profile?.roles?.admin) return;
     const unsub = onSnapshot(query(getColl('users')), (snapshot) => {
       const u = []; snapshot.forEach(doc => u.push(doc.data())); setUsers(u);
     });
     return () => unsub();
-  }, []);
+  }, [profile]);
 
   const handleRoleChange = async (uid, roleKey, value) => {
     try { 
@@ -937,7 +939,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
     finally { setIsUploadingPhoto(false); }
   };
 
-  // นำเข้าข้อมูลผ่าน Excel ที่รองรับ ครูที่ปรึกษา และ ห้อง
+  // นำเข้าข้อมูลผ่าน Excel ที่รองรับ ครูที่ปรึกษา และ ห้อง (9 คอลัมน์)
   const processImport = async () => {
     if (!importText.trim()) { showToast('กรุณาวางข้อมูลก่อน', 'error'); return; }
     showToast('กำลังนำเข้าข้อมูล...', 'loading');
@@ -1001,6 +1003,8 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
     saveSettings('departments', newArr);
     showToast(`ลบกลุ่มสาระฯ "${dept}" สำเร็จแล้ว`, 'success');
   };
+
+  if (!profile?.roles?.admin) return null;
 
   return (
     <div className="space-y-6 animate-fade-in-up relative">
