@@ -10,9 +10,10 @@ import {
   getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, 
   onAuthStateChanged, signOut 
 } from 'firebase/auth';
+// ลบ getFirestore ออก และใช้ initializeFirestore แทนเพื่อแก้ปัญหาเน็ตโรงเรียน
 import { 
-  collection, doc, setDoc, getDoc, getFirestore,
-  onSnapshot, query, getDocs, deleteDoc, where
+  collection, doc, setDoc, getDoc, initializeFirestore,
+  onSnapshot, query, getDocs, deleteDoc
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -28,7 +29,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app); // กลับมาใช้แบบมาตรฐาน ไม่ทำให้แอปแครช
+
+// 🚀 กุญแจสำคัญในการแก้ปัญหา "หมดเวลาการเชื่อมต่อ" (ทะลุ Firewall โรงเรียน)
+const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true 
+});
 
 const APP_ID = 'src-pa-hub-v1';
 
@@ -150,7 +155,7 @@ export default function App() {
       } else {
         window.Swal.fire({
           icon: type,
-          title: type === 'success' ? 'สำเร็จ!' : 'เกิดข้อผิดพลาด',
+          title: type === 'success' ? 'สำเร็จ!' : 'ข้อความแจ้งเตือน',
           text: message,
           timer: type === 'success' ? 2500 : undefined,
           showConfirmButton: type === 'error',
@@ -163,10 +168,23 @@ export default function App() {
     }
   };
 
+  // 🚀 ระบบตัดจบการโหลด (Timeout Fallback) ป้องกันหน้าจอขาวหมุนค้างตลอดกาล
+  useEffect(() => {
+    const fallbackTimer = setTimeout(() => {
+      if (loading) {
+        setLoading(false);
+        console.warn("Loading timed out. Forcing UI to display.");
+      }
+    }, 8000); // ถ้าเกิน 8 วินาที บังคับให้เข้าหน้าเว็บเลย ไม่ต้องรอ
+    return () => clearTimeout(fallbackTimer);
+  }, [loading]);
+
   useEffect(() => {
     const unsubSettings = onSnapshot(getDocRef('settings', 'system'), (docSnap) => {
       if (docSnap.exists()) { setAppSettings(prev => ({ ...prev, ...docSnap.data() })); } 
-      else { setDoc(getDocRef('settings', 'system'), { paYear: 2567, departments: DEFAULT_DEPARTMENTS }, { merge: true }); }
+      else { setDoc(getDocRef('settings', 'system'), { paYear: 2567, departments: DEFAULT_DEPARTMENTS }, { merge: true }).catch(e => console.log("Settings init error:", e)); }
+    }, (error) => {
+      console.error("Firebase Snapshot Error (Settings):", error);
     });
     return () => unsubSettings();
   }, []);
@@ -209,16 +227,20 @@ export default function App() {
           profileUnsub = onSnapshot(userRef, (snap) => {
             if (snap.exists()) setProfile(snap.data());
             setLoading(false); 
+          }, (error) => {
+            console.error("Profile Snapshot Error:", error);
+            setLoading(false);
           });
 
           usersUnsub = onSnapshot(getColl('users'), (snap) => {
             const map = {}; snap.forEach(d => map[d.id] = d.data()); setUsersMap(map);
+          }, (error) => {
+             console.error("Users Map Error:", error);
           });
 
         } catch (error) {
-          console.error("Initialization Error:", error);
-          setLoading(false);
-          // showToast('เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล โปรดตรวจสอบ Firebase Rules', 'error');
+          console.error("Database connection timeout or permission error:", error);
+          setLoading(false); // บังคับปิดโหลดเมื่อเกิด Error เพื่อให้เห็นหน้าเว็บ
         }
 
       } else {
@@ -231,7 +253,7 @@ export default function App() {
     return () => { authUnsub(); if (profileUnsub) profileUnsub(); if (usersUnsub) usersUnsub(); };
   }, []);
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-blue-800 bg-white"><Loader2 className="animate-spin w-12 h-12" /></div>;
+  if (loading) return <div className="min-h-screen flex flex-col items-center justify-center text-[#00529B] bg-white gap-4"><Loader2 className="animate-spin w-12 h-12" /><p className="font-bold animate-pulse">กำลังเชื่อมต่อฐานข้อมูล...</p></div>;
 
   return (
     <div className="min-h-screen bg-cover bg-center bg-fixed text-gray-800 relative font-['Prompt']" style={{ backgroundImage: "url('https://img1.pic.in.th/images/BG-web-app.png')" }}>
