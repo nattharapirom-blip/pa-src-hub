@@ -11,8 +11,8 @@ import {
   onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
-  collection, doc, setDoc, getDoc,
-  onSnapshot, query, getDocs, initializeFirestore, where, deleteDoc
+  collection, doc, setDoc, getDoc, getFirestore,
+  onSnapshot, query, getDocs, where, deleteDoc
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -28,19 +28,16 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-
-// ใช้ Long-Polling เพื่อช่วยทะลุบล็อกเบราว์เซอร์
-const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true 
-});
+// ปิดระบบ Long Polling ออก เพื่อให้ทำงานบนเซิร์ฟเวอร์จริงได้เร็วที่สุด
+const db = getFirestore(app); 
 
 const APP_ID = 'src-pa-hub-v1';
 
 const getColl = (collName) => collection(db, 'artifacts', APP_ID, 'public', 'data', collName);
 const getDocRef = (collName, docId) => doc(db, 'artifacts', APP_ID, 'public', 'data', collName, docId);
 
-// --- Utilities & Anti-Hang Mechanism ---
-const withTimeout = (promise, ms = 15000) => {
+// เพิ่มเวลา Timeout เป็น 20 วินาทีเผื่อเน็ตโรงเรียนช้า
+const withTimeout = (promise, ms = 20000) => {
   return Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('หมดเวลาการเชื่อมต่อ (โปรดตรวจสอบอินเทอร์เน็ต)')), ms))
@@ -118,23 +115,7 @@ export default function App() {
   const [usersMap, setUsersMap] = useState({});
 
   useEffect(() => {
-    // 1. โหลด SweetAlert2 แบบ CDN เพื่อป้องกัน Error หน้าขาว
-    if (!window.Swal && !document.getElementById('swal-script')) {
-      const script = document.createElement('script');
-      script.id = 'swal-script';
-      script.src = "https://cdn.jsdelivr.net/npm/sweetalert2@11";
-      document.head.appendChild(script);
-    }
-
-    // 2. โหลด Tailwind CSS ผ่าน CDN (สำคัญมาก! ขาดตัวนี้หน้าจะเละและขาว)
-    if (!document.getElementById('tailwind-script')) {
-      const tailwind = document.createElement('script');
-      tailwind.id = 'tailwind-script';
-      tailwind.src = "https://cdn.tailwindcss.com";
-      document.head.appendChild(tailwind);
-    }
-
-    // 3. CSS ที่ทำให้ระบบสวยงาม (Glassmorphism)
+    // CSS ที่ทำให้ระบบสวยงาม (Glassmorphism)
     const style = document.createElement('style');
     style.innerHTML = `
       @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;900&display=swap');
@@ -164,12 +145,11 @@ export default function App() {
 
   const showToast = (message, type = 'success') => {
     if (window.Swal) {
-      if (type === 'info') {
+      if (type === 'loading' || type === 'info') {
         window.Swal.fire({
           title: message,
           allowOutsideClick: false,
           showConfirmButton: false,
-          showCloseButton: true, 
           didOpen: () => { window.Swal.showLoading(); }
         });
       } else {
@@ -184,9 +164,15 @@ export default function App() {
         });
       }
     } else {
-      alert(message); 
+      if(type !== 'loading') alert(message); 
     }
   };
+
+  const closeToast = () => {
+    if (window.Swal) {
+      window.Swal.close();
+    }
+  }
 
   useEffect(() => {
     const unsubSettings = onSnapshot(getDocRef('settings', 'system'), (docSnap) => {
@@ -258,12 +244,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-cover bg-center bg-fixed text-gray-800 relative font-['Prompt']" style={{ backgroundImage: "url('https://img1.pic.in.th/images/BG-web-app.png')" }}>
-      {!user ? <Login showToast={showToast} /> : <MainLayout user={user} profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} />}
+      {!user ? <Login showToast={showToast} closeToast={closeToast} /> : <MainLayout user={user} profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} closeToast={closeToast} />}
     </div>
   );
 }
 
-function Login({ showToast }) {
+function Login({ showToast, closeToast }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -275,6 +261,7 @@ function Login({ showToast }) {
     if (!email.endsWith('@sriracha.ac.th')) { showToast('กรุณาใช้อีเมลของโรงเรียน (@sriracha.ac.th)', 'error'); setIsLoading(false); return; }
 
     try {
+      showToast('กำลังเข้าสู่ระบบ...', 'loading');
       await signInWithEmailAndPassword(auth, email, password);
       showToast('เข้าสู่ระบบสำเร็จ', 'success');
     } catch (err) {
@@ -333,7 +320,7 @@ function Login({ showToast }) {
   );
 }
 
-function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
+function MainLayout({ user, profile, appSettings, usersMap, showToast, closeToast }) {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
 
@@ -342,8 +329,12 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
   const isAdmin = profile?.roles?.admin || false;
 
   const handleLogout = () => {
-    showToast('กำลังออกจากระบบ...', 'info');
-    setTimeout(() => { signOut(auth); }, 1000);
+    showToast('กำลังออกจากระบบ...', 'loading');
+    setTimeout(() => { 
+      signOut(auth).then(() => {
+        closeToast(); // บังคับให้ปิดกล่องข้อความเมื่อล็อกเอาท์เสร็จ
+      }); 
+    }, 800);
   };
 
   const navItems = [
@@ -422,10 +413,10 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
         <main className="flex-1 overflow-y-auto p-4 md:p-8 relative custom-scrollbar">
           <div className="max-w-6xl mx-auto pb-20">
             {activeTab === 'dashboard' && <Dashboard profile={profile} usersMap={usersMap} />}
-            {activeTab === 'part1' && <TeacherPart1 profile={profile} appSettings={appSettings} showToast={showToast} />}
-            {activeTab === 'part2' && <TeacherPart2 profile={profile} showToast={showToast} />}
-            {activeTab === 'supervisor' && <SupervisorPanel profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} />}
-            {activeTab === 'admin' && <AdminPanel showToast={showToast} appSettings={appSettings} />}
+            {activeTab === 'part1' && <TeacherPart1 profile={profile} appSettings={appSettings} showToast={showToast} closeToast={closeToast} />}
+            {activeTab === 'part2' && <TeacherPart2 profile={profile} showToast={showToast} closeToast={closeToast} />}
+            {activeTab === 'supervisor' && <SupervisorPanel profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} closeToast={closeToast} />}
+            {activeTab === 'admin' && <AdminPanel showToast={showToast} appSettings={appSettings} closeToast={closeToast} />}
           </div>
         </main>
       </div>
@@ -530,7 +521,7 @@ function Dashboard({ profile, usersMap }) {
   );
 }
 
-function TeacherPart1({ profile, appSettings, showToast }) {
+function TeacherPart1({ profile, appSettings, showToast, closeToast }) {
   const [formData, setFormData] = useState({
     salary: '', licenseNumber: '', licenseIssue: '', licenseExpire: '', classes: [], subjects: '', 
     hours1: { teaching: '', support: '', dev: '', policy: '' }, hours2: { teaching: '', support: '', dev: '', policy: '' }
@@ -561,7 +552,7 @@ function TeacherPart1({ profile, appSettings, showToast }) {
 
   const saveProfile = async () => {
     setIsSaving(true);
-    showToast('กำลังบันทึกข้อมูล...', 'info');
+    showToast('กำลังบันทึกข้อมูล...', 'loading');
     try {
       const userRef = getDocRef('users', profile.uid);
       await withTimeout(setDoc(userRef, {
@@ -573,8 +564,9 @@ function TeacherPart1({ profile, appSettings, showToast }) {
       showToast('บันทึกข้อมูลส่วนที่ 1 สำเร็จแล้ว', 'success');
     } catch (err) { 
       showToast(err.message, 'error'); 
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
   };
 
   const totalHours1 = Object.values(formData.hours1 || {}).reduce((acc, val) => acc + (Number(val) || 0), 0);
@@ -670,7 +662,7 @@ function HourCard({ title, data, prefix, onChange, total }) {
   );
 }
 
-function TeacherPart2({ profile, showToast }) {
+function TeacherPart2({ profile, showToast, closeToast }) {
   const [paData, setPaData] = useState({ issue: '', problem: '', method: '', resultQuantity: '', resultQuality: '' });
   const [isSaving, setIsSaving] = useState(false);
   
@@ -685,12 +677,12 @@ function TeacherPart2({ profile, showToast }) {
 
   const savePA = async () => {
     setIsSaving(true);
-    showToast('กำลังบันทึกประเด็นท้าทาย...', 'info');
+    showToast('กำลังบันทึกประเด็นท้าทาย...', 'loading');
     try {
       await withTimeout(setDoc(getDocRef('pa', profile.uid), paData, { merge: true }));
       showToast('บันทึกประเด็นท้าทาย (ส่วนที่ 2) สำเร็จ', 'success');
     } catch (err) { showToast(err.message, 'error'); }
-    setIsSaving(false);
+    finally { setIsSaving(false); }
   };
 
   return (
@@ -744,7 +736,7 @@ function TeacherPart2({ profile, showToast }) {
   );
 }
 
-function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
+function SupervisorPanel({ profile, appSettings, usersMap, showToast, closeToast }) {
   const [teachers, setTeachers] = useState([]);
   const [selectedDept, setSelectedDept] = useState('');
   const [selectedGrade, setSelectedGrade] = useState('');
@@ -777,7 +769,7 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
   const checkAll = async (status) => {
     if (!selectedTask) return;
     setIsProcessing(true);
-    showToast('กำลังประมวลผล...', 'info');
+    showToast('กำลังประมวลผล...', 'loading');
     const filteredTeachers = teachers.filter(t => (!selectedDept || t.department === selectedDept) && (!selectedGrade || t.advisorGrade === selectedGrade));
     
     try {
@@ -790,8 +782,9 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
       showToast(`ทำรายการ ${status ? 'บันทึกส่งงาน' : 'ยกเลิก'} ทั้งหมดสำเร็จแล้ว`, 'success');
     } catch (error) {
       showToast(error.message, "error");
+    } finally {
+      setIsProcessing(false);
     }
-    setIsProcessing(false);
   };
 
   if (managedTasks.length === 0) return <div className="glass-panel p-16 text-center rounded-3xl flex flex-col items-center bg-white/50 border border-white"><AlertCircle size={72} className="text-[#ED1C24] mb-6 opacity-80" /><h2 className="text-3xl font-bold mb-3 text-gray-800">ไม่มีสิทธิ์เข้าถึง</h2><p className="text-gray-600 text-lg font-medium">ติดต่อผู้ดูแลระบบเพื่อกำหนดสิทธิ์การเป็นหัวหน้าบันทึกการส่งงาน</p></div>;
@@ -864,7 +857,7 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
   );
 }
 
-function AdminPanel({ showToast, appSettings }) {
+function AdminPanel({ showToast, appSettings, closeToast }) {
   const [users, setUsers] = useState([]);
   const [activeAdminTab, setActiveAdminTab] = useState('users'); 
   const [editingUser, setEditingUser] = useState(null);
@@ -919,7 +912,7 @@ function AdminPanel({ showToast, appSettings }) {
   };
 
   const saveEditUser = async () => {
-    showToast('กำลังบันทึกข้อมูล...', 'info');
+    showToast('กำลังบันทึกข้อมูล...', 'loading');
     try {
       if (isManualAddMode) {
         if (!editFormData.email || !editFormData.email.includes('@')) { showToast('กรุณาระบุ Email ให้ถูกต้อง', 'error'); return; }
@@ -938,7 +931,7 @@ function AdminPanel({ showToast, appSettings }) {
     const file = e.target.files[0];
     if (!file) return;
     setIsUploadingPhoto(true);
-    showToast('กำลังประมวลผลรูปภาพ...', 'info');
+    showToast('กำลังประมวลผลรูปภาพ...', 'loading');
     try {
       const base64Image = await compressImageToBase64(file, 400); 
       setEditFormData(prev => ({ ...prev, photoUrl: base64Image }));
@@ -949,7 +942,7 @@ function AdminPanel({ showToast, appSettings }) {
 
   const processImport = async () => {
     if (!importText.trim()) { showToast('กรุณาวางข้อมูลก่อน', 'error'); return; }
-    showToast('กำลังนำเข้าข้อมูล...', 'info');
+    showToast('กำลังนำเข้าข้อมูล...', 'loading');
     const rows = importText.split('\n').filter(r => r.trim() !== '');
     let successCount = 0, failCount = 0, errors = [];
 
@@ -981,7 +974,7 @@ function AdminPanel({ showToast, appSettings }) {
   };
 
   const saveSettings = async (key, value) => {
-    showToast('กำลังบันทึกการตั้งค่า...', 'info');
+    showToast('กำลังบันทึกการตั้งค่า...', 'loading');
     try { await withTimeout(setDoc(getDocRef('settings', 'system'), { [key]: value }, { merge: true })); showToast('บันทึกการตั้งค่าสำเร็จแล้ว', 'success'); } 
     catch (err) { showToast(err.message, 'error'); }
   };
