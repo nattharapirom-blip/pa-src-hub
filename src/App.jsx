@@ -28,22 +28,14 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-// ปิดระบบ Long Polling ออก เพื่อให้ทำงานบนเซิร์ฟเวอร์จริงได้เร็วที่สุด
-const db = getFirestore(app); 
+const db = getFirestore(app); // ใช้การตั้งค่ามาตรฐานของ Firebase เพื่อความเสถียรที่สุด
 
 const APP_ID = 'src-pa-hub-v1';
 
 const getColl = (collName) => collection(db, 'artifacts', APP_ID, 'public', 'data', collName);
 const getDocRef = (collName, docId) => doc(db, 'artifacts', APP_ID, 'public', 'data', collName, docId);
 
-// เพิ่มเวลา Timeout เป็น 20 วินาทีเผื่อเน็ตโรงเรียนช้า
-const withTimeout = (promise, ms = 20000) => {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('หมดเวลาการเชื่อมต่อ (โปรดตรวจสอบอินเทอร์เน็ต)')), ms))
-  ]);
-};
-
+// ฟังก์ชันแปลงรูปภาพ
 const compressImageToBase64 = (file, maxWidth = 400) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -115,7 +107,6 @@ export default function App() {
   const [usersMap, setUsersMap] = useState({});
 
   useEffect(() => {
-    // CSS ที่ทำให้ระบบสวยงาม (Glassmorphism)
     const style = document.createElement('style');
     style.innerHTML = `
       @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;900&display=swap');
@@ -123,15 +114,11 @@ export default function App() {
       .glass-panel { background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.3); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1); }
       .glass-input { background: rgba(255, 255, 255, 0.5); border: 1px solid rgba(255, 255, 255, 0.5); backdrop-filter: blur(4px); }
       .glass-input:focus { background: rgba(255, 255, 255, 0.8); outline: none; border-color: #00529B; box-shadow: 0 0 0 2px rgba(0, 82, 155, 0.2); }
-      
       .silver-frame { position: relative; background: white; padding: 4px; z-index: 1; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
       .silver-frame::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 25%, #e2ebf0 50%, #c3cfe2 75%, #f5f7fa 100%); z-index: -1; box-shadow: inset 0 0 4px rgba(255,255,255,0.8), 0 0 6px rgba(180,190,200,0.6); border: 1px solid rgba(255,255,255,0.5); }
-
       @keyframes fadeInDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
       .animate-fade-in-down { animation: fadeInDown 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-
       div:where(.swal2-container) div:where(.swal2-popup) { font-family: 'Prompt', sans-serif !important; border-radius: 20px !important; }
-
       @media print {
         body { background: white !important; }
         .bg-fixed { background-image: none !important; }
@@ -142,6 +129,10 @@ export default function App() {
     document.head.appendChild(style);
     return () => document.head.removeChild(style);
   }, []);
+
+  const closeToast = () => {
+    if (window.Swal) window.Swal.close();
+  }
 
   const showToast = (message, type = 'success') => {
     if (window.Swal) {
@@ -167,12 +158,6 @@ export default function App() {
       if(type !== 'loading') alert(message); 
     }
   };
-
-  const closeToast = () => {
-    if (window.Swal) {
-      window.Swal.close();
-    }
-  }
 
   useEffect(() => {
     const unsubSettings = onSnapshot(getDocRef('settings', 'system'), (docSnap) => {
@@ -219,7 +204,7 @@ export default function App() {
                 roles: { teacher: true, supervisor: false, admin: isFirstUser }, supervisorTasks: [], supervisorTitle: ''
               };
             }
-            try { await withTimeout(setDoc(userRef, newProfile, { merge: true })); setProfile(newProfile); } catch (err) { setProfile(newProfile); }
+            try { await setDoc(userRef, newProfile, { merge: true }); setProfile(newProfile); } catch (err) { setProfile(newProfile); }
           }
           setLoading(false);
         }, (error) => { 
@@ -254,6 +239,9 @@ function Login({ showToast, closeToast }) {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  // บังคับปิดกล่องข้อความที่อาจค้างอยู่เมื่อเข้ามาหน้า Login
+  useEffect(() => { closeToast(); }, []);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -263,7 +251,7 @@ function Login({ showToast, closeToast }) {
     try {
       showToast('กำลังเข้าสู่ระบบ...', 'loading');
       await signInWithEmailAndPassword(auth, email, password);
-      showToast('เข้าสู่ระบบสำเร็จ', 'success');
+      closeToast();
     } catch (err) {
       if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
         try {
@@ -293,8 +281,9 @@ function Login({ showToast, closeToast }) {
       } else { 
         showToast('เกิดข้อผิดพลาด: ' + err.message, 'error'); 
       }
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   return (
@@ -328,13 +317,14 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast, closeToas
   const isSupervisor = profile?.roles?.supervisor || false;
   const isAdmin = profile?.roles?.admin || false;
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     showToast('กำลังออกจากระบบ...', 'loading');
-    setTimeout(() => { 
-      signOut(auth).then(() => {
-        closeToast(); // บังคับให้ปิดกล่องข้อความเมื่อล็อกเอาท์เสร็จ
-      }); 
-    }, 800);
+    try {
+      await signOut(auth);
+      closeToast();
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
   };
 
   const navItems = [
@@ -555,12 +545,12 @@ function TeacherPart1({ profile, appSettings, showToast, closeToast }) {
     showToast('กำลังบันทึกข้อมูล...', 'loading');
     try {
       const userRef = getDocRef('users', profile.uid);
-      await withTimeout(setDoc(userRef, {
+      await setDoc(userRef, {
         salary: formData.salary || '', licenseNumber: formData.licenseNumber || '',
         licenseIssue: formData.licenseIssue || '', licenseExpire: formData.licenseExpire || '',
         classes: formData.classes || [], subjects: formData.subjects || '',
         hours1: formData.hours1 || {}, hours2: formData.hours2 || {}
-      }, { merge: true }));
+      }, { merge: true });
       showToast('บันทึกข้อมูลส่วนที่ 1 สำเร็จแล้ว', 'success');
     } catch (err) { 
       showToast(err.message, 'error'); 
@@ -679,7 +669,7 @@ function TeacherPart2({ profile, showToast, closeToast }) {
     setIsSaving(true);
     showToast('กำลังบันทึกประเด็นท้าทาย...', 'loading');
     try {
-      await withTimeout(setDoc(getDocRef('pa', profile.uid), paData, { merge: true }));
+      await setDoc(getDocRef('pa', profile.uid), paData, { merge: true });
       showToast('บันทึกประเด็นท้าทาย (ส่วนที่ 2) สำเร็จ', 'success');
     } catch (err) { showToast(err.message, 'error'); }
     finally { setIsSaving(false); }
@@ -761,7 +751,7 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast, closeToast
     const newStatus = !currentStatus;
     setTasksData(prev => ({ ...prev, [teacherUid]: { ...(prev[teacherUid] || {}), [taskId]: { status: newStatus, supervisorId: newStatus ? profile.uid : null, timestamp: Date.now() } } }));
     try {
-      await withTimeout(setDoc(getDocRef('tasks', teacherUid), { [taskId]: { status: newStatus, supervisorId: newStatus ? profile.uid : null, timestamp: Date.now() } }, { merge: true }));
+      await setDoc(getDocRef('tasks', teacherUid), { [taskId]: { status: newStatus, supervisorId: newStatus ? profile.uid : null, timestamp: Date.now() } }, { merge: true });
       showToast(`บันทึกการส่งงานสำเร็จแล้ว`, 'success');
     } catch (error) { showToast(error.message, "error"); }
   };
@@ -778,7 +768,7 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast, closeToast
          setTasksData(prev => ({ ...prev, [t.uid]: { ...(prev[t.uid] || {}), [selectedTask]: { status: status, supervisorId: status ? profile.uid : null, timestamp: Date.now() } } }));
          promises.push(setDoc(getDocRef('tasks', t.uid), { [selectedTask]: { status: status, supervisorId: status ? profile.uid : null, timestamp: Date.now() } }, { merge: true }));
       }
-      await withTimeout(Promise.all(promises));
+      await Promise.all(promises);
       showToast(`ทำรายการ ${status ? 'บันทึกส่งงาน' : 'ยกเลิก'} ทั้งหมดสำเร็จแล้ว`, 'success');
     } catch (error) {
       showToast(error.message, "error");
@@ -879,7 +869,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
 
   const handleRoleChange = async (uid, roleKey, value) => {
     try { 
-      await withTimeout(setDoc(getDocRef('users', uid), { roles: { [roleKey]: value } }, { merge: true })); 
+      await setDoc(getDocRef('users', uid), { roles: { [roleKey]: value } }, { merge: true }); 
       showToast(`อัปเดตสิทธิ์สำเร็จแล้ว`, 'success'); 
     } catch (err) { showToast(err.message, 'error'); }
   };
@@ -889,7 +879,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
       const user = users.find(u => u.uid === uid);
       let tasks = user.supervisorTasks || [];
       if (isChecked) tasks.push(taskId); else tasks = tasks.filter(id => id !== taskId);
-      await withTimeout(setDoc(getDocRef('users', uid), { supervisorTasks: tasks }, { merge: true }));
+      await setDoc(getDocRef('users', uid), { supervisorTasks: tasks }, { merge: true });
       showToast(`อัปเดตภาระงานสำเร็จแล้ว`, 'success');
     } catch (err) { showToast(err.message, 'error'); }
   };
@@ -917,14 +907,19 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
       if (isManualAddMode) {
         if (!editFormData.email || !editFormData.email.includes('@')) { showToast('กรุณาระบุ Email ให้ถูกต้อง', 'error'); return; }
         if (!editFormData.password || editFormData.password.length < 6) { showToast('รหัสผ่านเริ่มต้นต้องมีอย่างน้อย 6 ตัวอักษร', 'error'); return; }
-        await withTimeout(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users', editFormData.uid), { ...editFormData, email: editFormData.email.toLowerCase() }));
+        await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users', editFormData.uid), { ...editFormData, email: editFormData.email.toLowerCase() });
         showToast('เพิ่มผู้ใช้งานใหม่ลงในระบบสำเร็จแล้ว', 'success');
       } else {
-        await withTimeout(setDoc(getDocRef('users', editFormData.uid), editFormData, { merge: true }));
+        await setDoc(getDocRef('users', editFormData.uid), editFormData, { merge: true });
         showToast('บันทึกข้อมูลส่วนตัวสำเร็จแล้ว', 'success');
       }
       setEditFormData(null);
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) { 
+      showToast(err.message, 'error'); 
+    } finally {
+      // ให้หน้าต่างโหลดปิดเสมอไม่ว่าจะสำเร็จหรือมีข้อผิดพลาด
+      if (editFormData === null) closeToast(); 
+    }
   };
 
   const handleAdminImageUpload = async (e) => {
@@ -940,6 +935,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
     finally { setIsUploadingPhoto(false); }
   };
 
+  // ปรับปรุงฟังก์ชันนำเข้าข้อมูล เพิ่มคอลัมน์ ครูที่ปรึกษา(ชั้น) และ ห้อง
   const processImport = async () => {
     if (!importText.trim()) { showToast('กรุณาวางข้อมูลก่อน', 'error'); return; }
     showToast('กำลังนำเข้าข้อมูล...', 'loading');
@@ -951,18 +947,31 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
       const cols = rows[i].split(separator).map(c => c.trim().replace(/^"|"$/g, '')); 
       if (cols.length < 6) continue; 
       
-      const [email, password, title, firstName, lastName, standing, department] = cols;
+      // เพิ่มการดึงข้อมูล 9 คอลัมน์
+      const [email, password, title, firstName, lastName, standing, department, advisorGrade, advisorRoom] = cols;
       const targetUser = users.find(u => u.email.toLowerCase() === email.toLowerCase());
 
       if (targetUser) {
         try {
-          await withTimeout(setDoc(getDocRef('users', targetUser.uid), { title: title || targetUser.title, firstName: firstName || targetUser.firstName, lastName: lastName || targetUser.lastName, standing: standing || targetUser.standing, department: department || targetUser.department }, { merge: true }), 5000);
+          await setDoc(getDocRef('users', targetUser.uid), { 
+            title: title || targetUser.title || '', 
+            firstName: firstName || targetUser.firstName || '', 
+            lastName: lastName || targetUser.lastName || '', 
+            standing: standing || targetUser.standing || '', 
+            department: department || targetUser.department || '',
+            advisorGrade: advisorGrade || targetUser.advisorGrade || '',
+            advisorRoom: advisorRoom || targetUser.advisorRoom || ''
+          }, { merge: true });
           successCount++;
         } catch (err) { failCount++; errors.push(`${email}: ${err.message}`); }
       } else {
         if(!password) { failCount++; errors.push(`${email}: ไม่ได้กำหนดรหัสผ่านตั้งต้น`); continue; }
         try {
-          await withTimeout(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users', `pre_${Date.now()}_${i}`), { email: email.toLowerCase(), password, title, firstName, lastName, standing, department }), 5000);
+          await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users', `pre_${Date.now()}_${i}`), { 
+            email: email.toLowerCase(), password, title: title || '', firstName: firstName || '', lastName: lastName || '', 
+            standing: standing || 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: department || '',
+            advisorGrade: advisorGrade || '', advisorRoom: advisorRoom || ''
+          });
           successCount++;
         } catch(err) { failCount++; errors.push(`${email}: บันทึกรอล็อกอินล้มเหลว`); }
       }
@@ -975,7 +984,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
 
   const saveSettings = async (key, value) => {
     showToast('กำลังบันทึกการตั้งค่า...', 'loading');
-    try { await withTimeout(setDoc(getDocRef('settings', 'system'), { [key]: value }, { merge: true })); showToast('บันทึกการตั้งค่าสำเร็จแล้ว', 'success'); } 
+    try { await setDoc(getDocRef('settings', 'system'), { [key]: value }, { merge: true }); showToast('บันทึกการตั้งค่าสำเร็จแล้ว', 'success'); } 
     catch (err) { showToast(err.message, 'error'); }
   };
 
@@ -1126,7 +1135,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
             <h3 className="font-bold text-blue-900 mb-3 text-lg">วิธีใช้งาน:</h3>
             <ol className="list-decimal list-inside text-base text-gray-700 space-y-2 font-medium">
               <li>เปิดไฟล์ Excel ของคุณ</li>
-              <li>จัดเรียงคอลัมน์ตามลำดับดังนี้: <strong className="text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-100">Email | รหัสผ่าน | คำนำหน้า | ชื่อ | นามสกุล | วิทยฐานะ | กลุ่มสาระฯ</strong></li>
+              <li>จัดเรียงคอลัมน์ตามลำดับ 9 คอลัมน์ดังนี้: <br/><strong className="text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-100 mt-2 inline-block">Email | รหัสผ่าน | คำนำหน้า | ชื่อ | นามสกุล | วิทยฐานะ | กลุ่มสาระฯ | ครูที่ปรึกษา(ชั้น) | ห้อง</strong></li>
               <li>วาง (Paste) ข้อมูลลงในกล่องด้านล่างแล้วกด "เริ่มนำเข้าข้อมูล"</li>
               <li className="text-[#ED1C24] pt-2 mt-2 border-t border-blue-100/50">หมายเหตุ: รหัสผ่าน จะใช้ได้เฉพาะคนที่ไม่เคย Login เข้าสู่ระบบมาก่อนเท่านั้น (สร้างบัญชีรอไว้)</li>
             </ol>
@@ -1135,7 +1144,7 @@ function AdminPanel({ showToast, appSettings, closeToast }) {
           <textarea 
             value={importText} onChange={(e) => setImportText(e.target.value)} 
             className="w-full h-64 glass-input p-5 rounded-2xl font-mono text-sm resize-y bg-white/80 focus:bg-white transition-colors mb-6 shadow-inner border border-gray-200"
-            placeholder="test@sriracha.ac.th   1234567890   นาย   สมชาย   ใจดี   ครูชำนาญการ (คศ.2)   วิทยาศาสตร์และเทคโนโลยี"
+            placeholder="test@sriracha.ac.th   1234567890   นาย   สมชาย   ใจดี   ครูชำนาญการ (คศ.2)   วิทยาศาสตร์และเทคโนโลยี   ม.1   1"
           ></textarea>
 
           <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
