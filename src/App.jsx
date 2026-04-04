@@ -12,7 +12,7 @@ import {
 } from 'firebase/auth';
 import { 
   collection, doc, setDoc, getDoc, getFirestore,
-  onSnapshot, query, getDocs, deleteDoc
+  onSnapshot, query, getDocs, deleteDoc, where
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -28,7 +28,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const db = getFirestore(app); // กลับมาใช้แบบมาตรฐาน ไม่ทำให้แอปแครช
 
 const APP_ID = 'src-pa-hub-v1';
 
@@ -163,7 +163,6 @@ export default function App() {
     }
   };
 
-  // ดึงการตั้งค่าระบบ
   useEffect(() => {
     const unsubSettings = onSnapshot(getDocRef('settings', 'system'), (docSnap) => {
       if (docSnap.exists()) { setAppSettings(prev => ({ ...prev, ...docSnap.data() })); } 
@@ -172,7 +171,6 @@ export default function App() {
     return () => unsubSettings();
   }, []);
 
-  // ระบบตรวจสอบและสร้างโปรไฟล์ (แก้บั๊กลูปค้าง 100%)
   useEffect(() => {
     let profileUnsub;
     let usersUnsub;
@@ -183,11 +181,9 @@ export default function App() {
         const userRef = getDocRef('users', currentUser.uid);
 
         try {
-          // 1. ตรวจสอบก่อนว่ามีโปรไฟล์ในระบบหรือยัง (ทำแค่ครั้งเดียว ไม่เกิดลูป)
           const docSnap = await getDoc(userRef);
           
           if (!docSnap.exists()) {
-            // ถ้ายังไม่มีโปรไฟล์ (เพิ่งล็อกอินครั้งแรก) ให้ดึงข้อมูลที่แอดมินนำเข้ามารอไว้ (pre_users)
             let newProfile = {
               uid: currentUser.uid, email: currentUser.email, firstName: '', lastName: '', title: '',
               position: 'ครู', standing: 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: '', advisorGrade: '', advisorRoom: '', salary: '', photoUrl: '',
@@ -200,25 +196,21 @@ export default function App() {
             if (preUserData) {
               const data = preUserData.data();
               newProfile = { ...newProfile, ...data, roles: data.roles || newProfile.roles };
-              delete newProfile.password; // ไม่บันทึกรหัสผ่านลงในโปรไฟล์
-              await deleteDoc(preUserData.ref); // ลบออกจากกล่องรอ
+              delete newProfile.password;
+              await deleteDoc(preUserData.ref); 
             } else {
-              // เช็คว่าเป็นคนแรกของระบบหรือไม่ ถ้าใช่ให้เป็น Admin
               const allUsers = await getDocs(getColl('users'));
               if (allUsers.empty) newProfile.roles.admin = true;
             }
 
-            // บันทึกโปรไฟล์ใหม่
             await setDoc(userRef, newProfile);
           }
 
-          // 2. หลังจากเคลียร์โปรไฟล์เสร็จแล้ว ค่อยเริ่ม "ดักฟัง" การเปลี่ยนแปลงข้อมูล
           profileUnsub = onSnapshot(userRef, (snap) => {
             if (snap.exists()) setProfile(snap.data());
-            setLoading(false); // โหลดเสร็จสิ้น เข้าสู่หน้าหลักได้เลย
+            setLoading(false); 
           });
 
-          // 3. ดักฟังข้อมูลผู้ใช้ทั้งหมดเพื่อใช้แสดงชื่อ (ทำแบบเบาๆ ไม่ดึงลูป)
           usersUnsub = onSnapshot(getColl('users'), (snap) => {
             const map = {}; snap.forEach(d => map[d.id] = d.data()); setUsersMap(map);
           });
@@ -226,7 +218,7 @@ export default function App() {
         } catch (error) {
           console.error("Initialization Error:", error);
           setLoading(false);
-          showToast('เกิดข้อผิดพลาดในการดึงข้อมูล โปรดรีเฟรชหน้าจอ', 'error');
+          // showToast('เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล โปรดตรวจสอบ Firebase Rules', 'error');
         }
 
       } else {
@@ -253,7 +245,6 @@ function Login({ showToast, closeToast }) {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // ปิดกล่องข้อความทันทีที่หน้า Login โหลดเสร็จ
   useEffect(() => { closeToast(); }, []);
 
   const handleLogin = async (e) => {
@@ -266,11 +257,9 @@ function Login({ showToast, closeToast }) {
       showToast('กำลังเข้าสู่ระบบ...', 'loading');
       
       try {
-        // 1. พยายามล็อกอินด้วยบัญชีที่มีอยู่
         await signInWithEmailAndPassword(auth, email, password);
         closeToast();
       } catch (loginError) {
-        // 2. ถ้าไม่มีบัญชีในระบบ (user-not-found) ให้สร้างบัญชีใหม่ทันที!
         if (loginError.code === 'auth/user-not-found' || loginError.code === 'auth/invalid-credential') {
           try {
             await createUserWithEmailAndPassword(auth, email, password);
@@ -324,7 +313,7 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast, closeToas
     showToast('กำลังออกจากระบบ...', 'loading');
     try {
       await signOut(auth);
-      closeToast(); // บังคับปิดกล่องข้อความ
+      closeToast();
     } catch (error) {
       showToast(error.message, 'error');
     }
@@ -863,7 +852,6 @@ function AdminPanel({ profile, showToast, appSettings, closeToast }) {
   const [importResult, setImportResult] = useState(null);
   const [settingsForm, setSettingsForm] = useState({ paYear: appSettings.paYear, newDept: '' });
 
-  // ดึงรายชื่อผู้ใช้ทั้งหมดมาแสดงให้ Admin
   useEffect(() => {
     if (!profile?.roles?.admin) return;
     const unsub = onSnapshot(query(getColl('users')), (snapshot) => {
@@ -939,7 +927,6 @@ function AdminPanel({ profile, showToast, appSettings, closeToast }) {
     finally { setIsUploadingPhoto(false); }
   };
 
-  // นำเข้าข้อมูลผ่าน Excel ที่รองรับ ครูที่ปรึกษา และ ห้อง (9 คอลัมน์)
   const processImport = async () => {
     if (!importText.trim()) { showToast('กรุณาวางข้อมูลก่อน', 'error'); return; }
     showToast('กำลังนำเข้าข้อมูล...', 'loading');
