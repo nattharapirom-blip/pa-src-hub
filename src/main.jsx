@@ -3,49 +3,18 @@ import {
   Users, CheckSquare, FileText, User, Settings, LogOut, 
   Menu, X, Upload, Save, FileSpreadsheet, Briefcase, BarChart, 
   CheckCircle, AlertCircle, Edit, ClipboardList, Loader2, Info, ChevronRight,
-  Plus, Trash2, Settings2, UserPlus, Filter, KeyRound
+  Plus, Trash2, Settings2, UserPlus, Filter, KeyRound, RefreshCw
 } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, 
-  onAuthStateChanged, signOut 
-} from 'firebase/auth';
-import { 
-  collection, doc, setDoc, getDoc,
-  onSnapshot, query, getDocs, initializeFirestore, where, deleteDoc
-} from 'firebase/firestore';
 
-// --- Firebase Configuration ---
-const firebaseConfig = {
-  apiKey: "AIzaSyC9Y8-4_6SJgPrCrZn7J9Emw4psaNl_GNk",
-  authDomain: "pa-hub-src.firebaseapp.com",
-  projectId: "pa-hub-src",
-  storageBucket: "pa-hub-src.firebasestorage.app",
-  messagingSenderId: "1080948104443",
-  appId: "1:1080948104443:web:b005dabeda16fc727f245e",
-  measurementId: "G-DQK3BYS2BN"
-};
+// 🛑 1. นำ URL และ Key จากเว็บ Supabase ของคุณครูมาใส่ตรงนี้ครับ 🛑
+const SUPABASE_URL = 'https://sigyovimpryzthfgtyzt.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_UQdwrtJ7S9mQ58FZf-K-Pg_cNYZ7D0-';
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+// ตรวจสอบว่าใส่ URL หรือยัง
+const isSupabaseConfigured = SUPABASE_URL.startsWith('http');
+let supabase = null;
 
-const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true 
-});
-
-const APP_ID = 'src-pa-hub-v1';
-
-const getColl = (collName) => collection(db, 'artifacts', APP_ID, 'public', 'data', collName);
-const getDocRef = (collName, docId) => doc(db, 'artifacts', APP_ID, 'public', 'data', collName, docId);
-
-// --- Utilities & Anti-Hang Mechanism ---
-const withTimeout = (promise, ms = 15000) => {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('หมดเวลาการเชื่อมต่อ (โปรดตรวจสอบอินเทอร์เน็ต)')), ms))
-  ]);
-};
-
+// --- Utilities ---
 const compressImageToBase64 = (file, maxWidth = 400) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -110,10 +79,11 @@ const ROOMS = Array.from({length: 15}, (_, i) => (i + 1).toString());
 
 // --- Main Application ---
 export default function App() {
+  const [supabaseLoaded, setSupabaseLoaded] = useState(false);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [appSettings, setAppSettings] = useState({ paYear: 2567, departments: DEFAULT_DEPARTMENTS });
+  const [appSettings, setAppSettings] = useState({ pa_year: 2567, departments: DEFAULT_DEPARTMENTS });
   const [usersMap, setUsersMap] = useState({});
 
   useEffect(() => {
@@ -123,7 +93,6 @@ export default function App() {
       script.src = "https://cdn.jsdelivr.net/npm/sweetalert2@11";
       document.head.appendChild(script);
     }
-
     if (!document.getElementById('tailwind-script')) {
       const tailwind = document.createElement('script');
       tailwind.id = 'tailwind-script';
@@ -138,15 +107,14 @@ export default function App() {
       .glass-panel { background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.3); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1); }
       .glass-input { background: rgba(255, 255, 255, 0.5); border: 1px solid rgba(255, 255, 255, 0.5); backdrop-filter: blur(4px); }
       .glass-input:focus { background: rgba(255, 255, 255, 0.8); outline: none; border-color: #00529B; box-shadow: 0 0 0 2px rgba(0, 82, 155, 0.2); }
-      
       .silver-frame { position: relative; background: white; padding: 4px; z-index: 1; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
       .silver-frame::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 25%, #e2ebf0 50%, #c3cfe2 75%, #f5f7fa 100%); z-index: -1; box-shadow: inset 0 0 4px rgba(255,255,255,0.8), 0 0 6px rgba(180,190,200,0.6); border: 1px solid rgba(255,255,255,0.5); }
-
       @keyframes fadeInDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
       .animate-fade-in-down { animation: fadeInDown 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-
       div:where(.swal2-container) div:where(.swal2-popup) { font-family: 'Prompt', sans-serif !important; border-radius: 20px !important; }
-
+      .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 10px; }
       @media print {
         body { background: white !important; }
         .bg-fixed { background-image: none !important; }
@@ -158,111 +126,125 @@ export default function App() {
     return () => document.head.removeChild(style);
   }, []);
 
+  // โหลด Supabase ผ่าน CDN
+  useEffect(() => {
+    let isMounted = true;
+    const loadSupabaseScript = () => {
+      if (window.supabase) {
+        if (!supabase && isSupabaseConfigured) supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        if (isMounted) setSupabaseLoaded(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      script.crossOrigin = 'anonymous';
+      script.onload = () => {
+        if (!supabase && isSupabaseConfigured) supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        if (isMounted) setSupabaseLoaded(true);
+      };
+      document.head.appendChild(script);
+    };
+    loadSupabaseScript();
+    return () => { isMounted = false; };
+  }, []);
+
+  const closeToast = () => { if (window.Swal) window.Swal.close(); }
   const showToast = (message, type = 'success') => {
     if (window.Swal) {
-      if (type === 'info') {
-        window.Swal.fire({
-          title: message,
-          allowOutsideClick: false,
-          showConfirmButton: false,
-          showCloseButton: true, 
-          didOpen: () => { window.Swal.showLoading(); }
-        });
+      if (type === 'loading' || type === 'info') {
+        window.Swal.fire({ title: message, allowOutsideClick: false, showConfirmButton: false, didOpen: () => { window.Swal.showLoading(); } });
       } else {
-        window.Swal.fire({
-          icon: type,
-          title: type === 'success' ? 'สำเร็จ!' : 'เกิดข้อผิดพลาด',
-          text: message,
-          timer: type === 'success' ? 2500 : undefined,
-          showConfirmButton: type === 'error',
-          confirmButtonColor: '#00529B',
-          confirmButtonText: 'ตกลงรับทราบ'
-        });
+        window.Swal.fire({ icon: type, title: type === 'success' ? 'สำเร็จ!' : 'แจ้งเตือน', text: message, timer: type === 'success' ? 2500 : undefined, showConfirmButton: type === 'error', confirmButtonColor: '#00529B' });
       }
-    } else {
-      alert(message); 
-    }
+    } else { if(type !== 'loading') alert(message); }
+  };
+
+  const fetchAppData = async () => {
+    try {
+      const { data: settingsData } = await supabase.from('system_settings').select('*').eq('id', 'system').single();
+      if (settingsData) setAppSettings(settingsData);
+
+      const { data: usersData } = await supabase.from('profiles').select('id, first_name, last_name, supervisor_title');
+      if (usersData) {
+        const map = {};
+        usersData.forEach(u => map[u.id] = u);
+        setUsersMap(map);
+      }
+    } catch (err) { console.error("Error fetching app data:", err); }
+  };
+
+  const fetchUserProfile = async (userId, email) => {
+    try {
+      let { data: userProfile } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      
+      if (!userProfile) {
+        // ค้นหาใน pre_users
+        const { data: preUser } = await supabase.from('pre_users').select('*').eq('email', email.toLowerCase()).single();
+        const { data: allProfiles } = await supabase.from('profiles').select('id');
+        const isFirstUser = !allProfiles || allProfiles.length === 0;
+
+        let newProfile = { id: userId, email: email, is_teacher: true, is_supervisor: false, is_admin: isFirstUser };
+
+        if (preUser) {
+          newProfile = { ...newProfile, first_name: preUser.first_name, last_name: preUser.last_name, title: preUser.title, standing: preUser.standing, department: preUser.department, advisor_grade: preUser.advisor_grade, advisor_room: preUser.advisor_room };
+          await supabase.from('pre_users').delete().eq('email', email.toLowerCase());
+        }
+        const { data: insertedProfile } = await supabase.from('profiles').insert(newProfile).select().single();
+        userProfile = insertedProfile;
+      }
+      setProfile(userProfile);
+    } catch (error) { console.error("Error fetching profile:", error); } 
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
-    const unsubSettings = onSnapshot(getDocRef('settings', 'system'), (docSnap) => {
-      if (docSnap.exists()) { setAppSettings(prev => ({ ...prev, ...docSnap.data() })); } 
-      else { setDoc(getDocRef('settings', 'system'), { paYear: 2567, departments: DEFAULT_DEPARTMENTS }, { merge: true }); }
+    if (!supabaseLoaded) return;
+    if (!isSupabaseConfigured) { setLoading(false); return; }
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        fetchAppData();
+        fetchUserProfile(session.user.id, session.user.email);
+      } else { setLoading(false); }
     });
-    return () => unsubSettings();
-  }, []);
 
-  useEffect(() => {
-    let profileUnsub;
-    let usersUnsub;
-
-    const authUnsub = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        setProfile(prev => prev || { uid: currentUser.uid, email: currentUser.email, firstName: 'กำลังโหลด...', roles: { teacher: true, supervisor: false, admin: false } });
-
-        const userRef = getDocRef('users', currentUser.uid);
-        profileUnsub = onSnapshot(userRef, async (userSnap) => {
-          if (userSnap.exists()) {
-            setProfile(userSnap.data());
-          } else {
-            let newProfile = null;
-            try {
-              const preUsersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users');
-              const q = query(preUsersRef, where("email", "==", currentUser.email.toLowerCase()));
-              const querySnapshot = await getDocs(q);
-              if (!querySnapshot.empty) {
-                const preUserDoc = querySnapshot.docs[0];
-                const preData = preUserDoc.data();
-                delete preData.password;
-                newProfile = { ...preData, uid: currentUser.uid };
-                await deleteDoc(preUserDoc.ref);
-              }
-            } catch (err) {}
-
-            if (!newProfile) {
-              let isFirstUser = false;
-              try { const usersSnap = await getDocs(query(getColl('users'))); isFirstUser = usersSnap.empty; } catch (e) {}
-              newProfile = {
-                uid: currentUser.uid, email: currentUser.email, firstName: '', lastName: '', title: '',
-                position: 'ครู', standing: 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: '', advisorGrade: '', advisorRoom: '', salary: '', photoUrl: '',
-                roles: { teacher: true, supervisor: false, admin: isFirstUser }, supervisorTasks: [], supervisorTitle: ''
-              };
-            }
-            try { await withTimeout(setDoc(userRef, newProfile, { merge: true })); setProfile(newProfile); } catch (err) { setProfile(newProfile); }
-          }
-          setLoading(false);
-        }, (error) => { 
-          console.error("Firebase Snapshot Error:", error);
-          setLoading(false); 
-        });
-
-        usersUnsub = onSnapshot(query(getColl('users')), (snap) => {
-          const map = {}; snap.forEach(d => map[d.id] = d.data()); setUsersMap(map);
-        });
-
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        fetchAppData();
+        fetchUserProfile(session.user.id, session.user.email);
       } else {
         setUser(null); setProfile(null); setLoading(false);
-        if (profileUnsub) profileUnsub();
-        if (usersUnsub) usersUnsub();
       }
     });
-    return () => { authUnsub(); if (profileUnsub) profileUnsub(); if (usersUnsub) usersUnsub(); };
-  }, []);
+    return () => subscription?.unsubscribe();
+  }, [supabaseLoaded]);
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-blue-800 bg-white"><Loader2 className="animate-spin w-12 h-12" /></div>;
+  if (!isSupabaseConfigured) return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-white text-[#00529B] p-8 text-center font-['Prompt']">
+      <AlertCircle size={64} className="mb-4 text-[#ED1C24]" />
+      <h1 className="text-2xl font-bold mb-2">ยังไม่ได้ตั้งค่าการเชื่อมต่อฐานข้อมูล</h1>
+      <p className="text-lg text-gray-600">กรุณานำ <b>Project URL</b> และ <b>API Key</b> จากเว็บ Supabase <br/>มาใส่ในไฟล์ <b>main.jsx</b> (บรรทัดที่ 10-11)</p>
+    </div>
+  );
+
+  if (!supabaseLoaded || loading) return <div className="min-h-screen flex items-center justify-center text-blue-800 bg-white"><Loader2 className="animate-spin w-12 h-12" /></div>;
 
   return (
     <div className="min-h-screen bg-cover bg-center bg-fixed text-gray-800 relative font-['Prompt']" style={{ backgroundImage: "url('https://img1.pic.in.th/images/BG-web-app.png')" }}>
-      {!user ? <Login showToast={showToast} /> : <MainLayout user={user} profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} />}
+      {!user ? <Login showToast={showToast} closeToast={closeToast} supabase={supabase} /> : 
+        <MainLayout user={user} profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} closeToast={closeToast} supabase={supabase} refreshProfile={() => fetchUserProfile(user.id, user.email)} />}
     </div>
   );
 }
 
-function Login({ showToast }) {
+function Login({ showToast, closeToast, supabase }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => { closeToast(); }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -271,39 +253,22 @@ function Login({ showToast }) {
     if (!email.endsWith('@sriracha.ac.th')) { showToast('กรุณาใช้อีเมลของโรงเรียน (@sriracha.ac.th)', 'error'); setIsLoading(false); return; }
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      showToast('เข้าสู่ระบบสำเร็จ', 'success');
-    } catch (err) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        try {
-          const preUsersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users');
-          const qPre = query(preUsersRef, where("email", "==", email.toLowerCase()));
-          const snapPre = await getDocs(qPre);
+      showToast('กำลังตรวจสอบสิทธิ์เข้าสู่ระบบ...', 'loading');
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.toLowerCase(), password: password });
 
-          if (!snapPre.empty) {
-            const preData = snapPre.docs[0].data();
-            if (preData.password && preData.password !== password) {
-              showToast('รหัสผ่านไม่ถูกต้อง หรือบัญชีนี้ยังไม่ได้รับอนุญาต', 'error');
-              setIsLoading(false);
-              return;
-            }
-            await createUserWithEmailAndPassword(auth, email, password);
-            showToast('ลงทะเบียนครั้งแรกและเข้าสู่ระบบสำเร็จ', 'success');
-          } else {
-             const usersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'users');
-             const qUser = query(usersRef, where("email", "==", email.toLowerCase()));
-             const snapUser = await getDocs(qUser);
-             if (!snapUser.empty) { showToast('รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่', 'error'); } 
-             else { showToast('บัญชีนี้ไม่ได้รับอนุญาต: ผู้ดูแลระบบยังไม่ได้เพิ่มอีเมลของคุณเข้าระบบ', 'error'); }
-          }
-        } catch (dbErr) {
-          showToast('ข้อผิดพลาดการเชื่อมต่อฐานข้อมูล (โปรดตรวจสอบ Firestore)', 'error');
-        }
-      } else { 
-        showToast('เกิดข้อผิดพลาด: ' + err.message, 'error'); 
-      }
-    }
-    setIsLoading(false);
+      if (error) {
+        if (error.message.includes('Invalid login credentials')) {
+          const { data: preUser } = await supabase.from('pre_users').select('*').eq('email', email.toLowerCase()).single();
+          if (preUser) {
+            if (preUser.password !== password) { showToast('รหัสผ่านเริ่มต้นไม่ถูกต้อง', 'error'); setIsLoading(false); return; }
+            const { error: signUpError } = await supabase.auth.signUp({ email: email.toLowerCase(), password: password });
+            if (signUpError) throw signUpError;
+            showToast('ลงทะเบียนและเข้าสู่ระบบสำเร็จ', 'success');
+          } else { showToast('อีเมลหรือรหัสผ่านไม่ถูกต้อง หรือยังไม่ได้เพิ่มเข้าสู่ระบบ', 'error'); }
+        } else { throw error; }
+      } else { closeToast(); }
+    } catch (err) { showToast('เกิดข้อผิดพลาด: ' + err.message, 'error'); } 
+    finally { setIsLoading(false); }
   };
 
   return (
@@ -315,11 +280,12 @@ function Login({ showToast }) {
             <span className="bg-gradient-to-br from-[#FF6B6B] via-[#D31027] to-[#7A0000] bg-clip-text text-transparent pr-2 drop-shadow-sm">SRC</span>
             <span className="bg-gradient-to-b from-[#3A8DFF] via-[#00529B] to-[#002855] bg-clip-text text-transparent">PA Hub</span>
           </h1>
-          <p className="text-gray-600 font-medium text-sm md:text-base">ระบบบริหารจัดการภาระงานและประเด็นท้าทาย</p>
+          <p className="text-gray-600 font-medium text-sm md:text-base mb-2">ระบบบริหารจัดการภาระงานและประเด็นท้าทาย</p>
+          <div className="bg-green-100 text-green-800 text-xs py-1 px-3 rounded-full inline-block font-bold border border-green-200">✨ Supabase Edition</div>
         </div>
         <form onSubmit={handleLogin} className="space-y-5">
           <div><label className="block text-sm font-bold text-gray-700 mb-1">ชื่อผู้ใช้งาน (Email โรงเรียน)</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="example@sriracha.ac.th" className="glass-input w-full px-4 py-3.5 rounded-xl transition-all shadow-sm focus:shadow-md font-bold" required disabled={isLoading} /></div>
-          <div><label className="block text-sm font-bold text-gray-700 mb-1">รหัสผ่าน (เบอร์โทรศัพท์ 10 หลัก)</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="กรอกรหัสผ่าน..." className="glass-input w-full px-4 py-3.5 rounded-xl transition-all shadow-sm focus:shadow-md font-bold" required disabled={isLoading} /></div>
+          <div><label className="block text-sm font-bold text-gray-700 mb-1">รหัสผ่าน</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="กรอกรหัสผ่าน..." className="glass-input w-full px-4 py-3.5 rounded-xl transition-all shadow-sm focus:shadow-md font-bold" required disabled={isLoading} /></div>
           <button type="submit" disabled={isLoading} className="w-full bg-gradient-to-r from-[#00529B] to-blue-700 hover:to-blue-800 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg mt-6 flex justify-center items-center transform hover:-translate-y-0.5">
             {isLoading ? <><Loader2 className="animate-spin mr-2" size={20} /> กำลังตรวจสอบสิทธิ์...</> : 'เข้าสู่ระบบ'}
           </button>
@@ -329,17 +295,18 @@ function Login({ showToast }) {
   );
 }
 
-function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
+function MainLayout({ user, profile, appSettings, usersMap, showToast, closeToast, supabase, refreshProfile }) {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  const isTeacher = profile?.roles?.teacher || false;
-  const isSupervisor = profile?.roles?.supervisor || false;
-  const isAdmin = profile?.roles?.admin || false;
+  const isTeacher = profile?.is_teacher || false;
+  const isSupervisor = profile?.is_supervisor || false;
+  const isAdmin = profile?.is_admin || false;
 
-  const handleLogout = () => {
-    showToast('กำลังออกจากระบบ...', 'info');
-    setTimeout(() => { signOut(auth); }, 1000);
+  const handleLogout = async () => {
+    showToast('กำลังออกจากระบบ...', 'loading');
+    try { await supabase.auth.signOut(); closeToast(); } 
+    catch (error) { showToast(error.message, 'error'); }
   };
 
   const navItems = [
@@ -374,11 +341,12 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
             <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-gray-500 hover:text-gray-800 bg-white/50 p-1 rounded-lg"><X size={20} /></button>
           </div>
           
-          <div className="px-6 py-6 border-b border-gray-200/50 flex flex-col items-center text-center">
+          <div className="px-6 py-6 border-b border-gray-200/50 flex flex-col items-center text-center relative">
+            <button onClick={refreshProfile} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-blue-600 bg-white rounded-lg shadow-sm border border-gray-100"><RefreshCw size={14}/></button>
             <div className="silver-frame rounded-xl w-24 h-32 flex-shrink-0 mb-4 flex items-center justify-center overflow-hidden">
-              {profile?.photoUrl ? <img src={profile.photoUrl} alt="Profile" className="w-full h-full object-cover rounded-lg" /> : <User size={40} className="text-gray-400" />}
+              {profile?.photo_url ? <img src={profile.photo_url} alt="Profile" className="w-full h-full object-cover rounded-lg" /> : <User size={40} className="text-gray-400" />}
             </div>
-            <div className="font-bold text-blue-900 truncate w-full text-lg">{profile?.title}{profile?.firstName} {profile?.lastName}</div>
+            <div className="font-bold text-blue-900 truncate w-full text-lg">{profile?.title}{profile?.first_name} {profile?.last_name}</div>
             <div className="text-sm font-bold text-blue-800 bg-blue-100/80 border border-blue-200 px-3 py-1 rounded-full mt-2 inline-block shadow-sm">
               {renderStanding(profile?.standing)}
             </div>
@@ -387,13 +355,8 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
 
           <nav className="flex-1 px-4 py-4 space-y-2 overflow-y-auto custom-scrollbar">
             {navItems.filter(item => item.show).map(item => (
-              <button
-                key={item.id}
-                onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }}
-                className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all font-bold ${activeTab === item.id ? 'bg-gradient-to-r from-[#00529B] to-blue-700 text-white shadow-md' : 'text-gray-700 hover:bg-white/80'}`}
-              >
-                <item.icon size={20} />
-                <span>{item.label}</span>
+              <button key={item.id} onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all font-bold ${activeTab === item.id ? 'bg-gradient-to-r from-[#00529B] to-blue-700 text-white shadow-md' : 'text-gray-700 hover:bg-white/80'}`}>
+                <item.icon size={20} /><span>{item.label}</span>
               </button>
             ))}
           </nav>
@@ -408,20 +371,17 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
 
       <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
         <div className="lg:hidden glass-panel p-4 flex items-center justify-between z-40 no-print border-b border-white/50">
-          <div className="flex items-center space-x-3">
-            <button onClick={() => setSidebarOpen(true)} className="p-2 text-blue-900 bg-white/80 rounded-lg shadow-sm border border-gray-200"><Menu size={20} /></button>
-            <LuxuryBrandName className="text-xl" />
-          </div>
+          <div className="flex items-center space-x-3"><button onClick={() => setSidebarOpen(true)} className="p-2 text-blue-900 bg-white/80 rounded-lg shadow-sm border border-gray-200"><Menu size={20} /></button><LuxuryBrandName className="text-xl" /></div>
           <img src="https://img1.pic.in.th/images/-69-1.png" alt="Logo" className="h-8" />
         </div>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-8 relative custom-scrollbar">
           <div className="max-w-6xl mx-auto pb-20">
-            {activeTab === 'dashboard' && <Dashboard profile={profile} usersMap={usersMap} />}
-            {activeTab === 'part1' && <TeacherPart1 profile={profile} appSettings={appSettings} showToast={showToast} />}
-            {activeTab === 'part2' && <TeacherPart2 profile={profile} showToast={showToast} />}
-            {activeTab === 'supervisor' && <SupervisorPanel profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} />}
-            {activeTab === 'admin' && <AdminPanel showToast={showToast} appSettings={appSettings} />}
+            {activeTab === 'dashboard' && <Dashboard profile={profile} usersMap={usersMap} supabase={supabase} />}
+            {activeTab === 'part1' && <TeacherPart1 profile={profile} appSettings={appSettings} showToast={showToast} supabase={supabase} refreshProfile={refreshProfile} />}
+            {activeTab === 'part2' && <TeacherPart2 profile={profile} showToast={showToast} supabase={supabase} />}
+            {activeTab === 'supervisor' && <SupervisorPanel profile={profile} appSettings={appSettings} usersMap={usersMap} showToast={showToast} supabase={supabase} />}
+            {activeTab === 'admin' && <AdminPanel profile={profile} showToast={showToast} appSettings={appSettings} closeToast={closeToast} supabase={supabase} />}
           </div>
         </main>
       </div>
@@ -429,28 +389,27 @@ function MainLayout({ user, profile, appSettings, usersMap, showToast }) {
   );
 }
 
-function Dashboard({ profile, usersMap }) {
-  const [tasksStatus, setTasksStatus] = useState({});
+function Dashboard({ profile, usersMap, supabase }) {
+  const [tasksStatus, setTasksStatus] = useState([]);
   const [stats, setStats] = useState({ total: 18, completed: 0, percent: 0 });
 
-  useEffect(() => {
-    if (!profile?.uid) return;
-    const tasksRef = getDocRef('tasks', profile.uid);
-    const unsubscribe = onSnapshot(tasksRef, (doc) => {
-      if (doc.exists()) {
-        const data = doc.data();
-        setTasksStatus(data);
-        const completed = TASK_LIST.filter(t => data[t.id]?.status === true).length;
-        setStats({ total: 18, completed, percent: Math.round((completed / 18) * 100) });
-      }
-    });
-    return () => unsubscribe();
-  }, [profile?.uid]);
+  const fetchTasks = async () => {
+    if (!profile?.id) return;
+    const { data } = await supabase.from('tasks').select('*').eq('teacher_id', profile.id).eq('status', true);
+    if (data) {
+      setTasksStatus(data);
+      setStats({ total: 18, completed: data.length, percent: Math.round((data.length / 18) * 100) });
+    }
+  };
+
+  useEffect(() => { fetchTasks(); }, [profile?.id]);
 
   const renderStanding = (standing) => {
     if (!standing || standing === '-' || standing.includes('ไม่มีวิทยฐานะ')) return 'ครู';
     return standing.split(' (')[0];
   };
+
+  const getTaskStatus = (taskId) => { return tasksStatus.find(t => t.task_id === taskId); };
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -459,17 +418,20 @@ function Dashboard({ profile, usersMap }) {
         <div className="absolute bottom-0 left-0 w-48 h-48 bg-red-400/10 rounded-full blur-3xl -ml-10 -mb-10"></div>
         
         <div className="silver-frame rounded-2xl w-32 h-44 flex-shrink-0 z-10 flex items-center justify-center overflow-hidden bg-gray-100">
-          {profile?.photoUrl ? <img src={profile.photoUrl} alt="Profile" className="w-full h-full object-cover rounded-xl" /> : <User size={48} className="text-gray-300" />}
+          {profile?.photo_url ? <img src={profile.photo_url} alt="Profile" className="w-full h-full object-cover rounded-xl" /> : <User size={48} className="text-gray-300" />}
         </div>
         
         <div className="flex-1 text-center md:text-left z-10 w-full">
-          <h2 className="text-2xl md:text-3xl font-bold text-blue-900 drop-shadow-sm mb-1">{profile?.title}{profile?.firstName} {profile?.lastName || 'ยินดีต้อนรับ'}</h2>
-          {!profile?.firstName && <p className="text-red-500 text-sm font-medium mb-2">* กรุณาให้ Admin นำเข้าข้อมูลส่วนตัวของคุณ</p>}
+          <div className="flex justify-center md:justify-start items-center gap-3 mb-1">
+            <h2 className="text-2xl md:text-3xl font-bold text-blue-900 drop-shadow-sm">{profile?.title}{profile?.first_name} {profile?.last_name || 'ยินดีต้อนรับ'}</h2>
+            <button onClick={fetchTasks} className="p-2 bg-white rounded-full shadow-sm hover:text-blue-600 transition-colors"><RefreshCw size={18}/></button>
+          </div>
+          {!profile?.first_name && <p className="text-red-500 text-sm font-medium mb-2">* กรุณาให้ Admin นำเข้าข้อมูลส่วนตัวของคุณ หรือกดไปที่ส่วนที่ 1 เพื่อกรอกข้อมูล</p>}
           
           <div className="mt-3 space-y-1.5 inline-block text-left bg-white/50 p-4 rounded-xl border border-white/60 shadow-sm">
             <p className="text-gray-700 font-medium flex items-center"><span className="w-24 text-gray-500 font-bold">ตำแหน่ง:</span> <span className="text-blue-800 font-bold">{renderStanding(profile?.standing)}</span></p>
             <p className="text-gray-700 font-medium flex items-center"><span className="w-24 text-gray-500 font-bold">กลุ่มสาระฯ:</span> <span className="text-blue-800 font-bold">{profile?.department || '-'}</span></p>
-            {profile?.advisorGrade && <p className="text-gray-700 font-medium flex items-center"><span className="w-24 text-gray-500 font-bold">ที่ปรึกษา:</span> <span className="text-blue-800 font-bold">{profile.advisorGrade}/{profile.advisorRoom || '-'}</span></p>}
+            {profile?.advisor_grade && <p className="text-gray-700 font-medium flex items-center"><span className="w-24 text-gray-500 font-bold">ที่ปรึกษา:</span> <span className="text-blue-800 font-bold">{profile.advisor_grade}/{profile.advisor_room || '-'}</span></p>}
           </div>
           
           <div className="mt-6 glass-panel p-5 rounded-2xl bg-white/70 border-white shadow-sm">
@@ -488,12 +450,12 @@ function Dashboard({ profile, usersMap }) {
         <div className="glass-panel p-6 rounded-3xl flex flex-col h-[26rem] bg-white/50 border border-white">
           <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center pb-3 border-b border-gray-200/50"><CheckSquare className="mr-2 text-green-500" size={22}/> ภาระงานที่ส่งแล้ว ({stats.completed})</h3>
           <ul className="space-y-3 overflow-y-auto pr-2 custom-scrollbar flex-1">
-            {TASK_LIST.filter(t => tasksStatus[t.id]?.status).length === 0 && <div className="h-full flex flex-col items-center justify-center text-gray-400"><Info className="w-8 h-8 mb-2 opacity-50"/><p className="text-sm font-medium">ยังไม่มีงานที่ส่ง</p></div>}
-            {TASK_LIST.filter(t => tasksStatus[t.id]?.status).map(task => {
-               const record = tasksStatus[task.id];
-               const supInfo = record.supervisorId ? usersMap[record.supervisorId] : null;
-               const supName = supInfo ? `${supInfo.firstName} ${supInfo.lastName}` : 'หัวหน้างาน';
-               const supTitle = supInfo?.supervisorTitle || '';
+            {TASK_LIST.filter(t => getTaskStatus(t.id)).length === 0 && <div className="h-full flex flex-col items-center justify-center text-gray-400"><Info className="w-8 h-8 mb-2 opacity-50"/><p className="text-sm font-medium">ยังไม่มีงานที่ส่ง</p></div>}
+            {TASK_LIST.filter(t => getTaskStatus(t.id)).map(task => {
+               const record = getTaskStatus(task.id);
+               const supInfo = record.supervisor_id ? usersMap[record.supervisor_id] : null;
+               const supName = supInfo ? `${supInfo.first_name} ${supInfo.last_name}` : 'หัวหน้างาน';
+               const supTitle = supInfo?.supervisor_title || '';
 
                return (
                 <li key={task.id} className="flex items-start text-sm p-4 bg-white rounded-2xl border border-gray-100 shadow-sm transition-all hover:shadow-md">
@@ -512,8 +474,8 @@ function Dashboard({ profile, usersMap }) {
         <div className="glass-panel p-6 rounded-3xl flex flex-col h-[26rem] bg-white/50 border border-white">
           <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center pb-3 border-b border-gray-200/50"><FileText className="mr-2 text-red-500" size={22}/> ภาระงานที่ยังไม่ส่ง ({18 - stats.completed})</h3>
           <ul className="space-y-3 overflow-y-auto pr-2 custom-scrollbar flex-1">
-             {TASK_LIST.filter(t => !tasksStatus[t.id]?.status).length === 0 && <div className="h-full flex flex-col items-center justify-center text-green-600 font-bold bg-green-50/50 rounded-xl border border-green-100"><span className="text-3xl mb-2">🎉</span>ส่งงานครบทุกรายการแล้ว เยี่ยมมาก!</div>}
-            {TASK_LIST.filter(t => !tasksStatus[t.id]?.status).map(task => (
+             {TASK_LIST.filter(t => !getTaskStatus(t.id)).length === 0 && <div className="h-full flex flex-col items-center justify-center text-green-600 font-bold bg-green-50/50 rounded-xl border border-green-100"><span className="text-3xl mb-2">🎉</span>ส่งงานครบทุกรายการแล้ว เยี่ยมมาก!</div>}
+            {TASK_LIST.filter(t => !getTaskStatus(t.id)).map(task => (
               <li key={task.id} className="flex items-center text-sm p-3.5 bg-red-50/50 rounded-xl border border-red-100">
                 <X size={18} className="text-red-500 mr-3 flex-shrink-0" />
                 <span className="text-gray-700 font-bold">{task.name}</span>
@@ -526,10 +488,10 @@ function Dashboard({ profile, usersMap }) {
   );
 }
 
-function TeacherPart1({ profile, appSettings, showToast }) {
+function TeacherPart1({ profile, appSettings, showToast, supabase, refreshProfile }) {
   const [formData, setFormData] = useState({
-    salary: '', licenseNumber: '', licenseIssue: '', licenseExpire: '', classes: [], subjects: '', 
-    hours1: { teaching: '', support: '', dev: '', policy: '' }, hours2: { teaching: '', support: '', dev: '', policy: '' }
+    title: '', first_name: '', last_name: '', salary: '', license_number: '', license_issue: '', license_expire: '', 
+    classes: [], subjects: '', hours1: { teaching: '', support: '', dev: '', policy: '' }, hours2: { teaching: '', support: '', dev: '', policy: '' }
   });
   const [isSaving, setIsSaving] = useState(false);
 
@@ -557,25 +519,24 @@ function TeacherPart1({ profile, appSettings, showToast }) {
 
   const saveProfile = async () => {
     setIsSaving(true);
-    showToast('กำลังบันทึกข้อมูล...', 'info');
+    showToast('กำลังบันทึกข้อมูล...', 'loading');
     try {
-      const userRef = getDocRef('users', profile.uid);
-      await withTimeout(setDoc(userRef, {
-        salary: formData.salary || '', licenseNumber: formData.licenseNumber || '',
-        licenseIssue: formData.licenseIssue || '', licenseExpire: formData.licenseExpire || '',
-        classes: formData.classes || [], subjects: formData.subjects || '',
-        hours1: formData.hours1 || {}, hours2: formData.hours2 || {}
-      }, { merge: true }));
+      const updateData = {
+        title: formData.title, first_name: formData.first_name, last_name: formData.last_name,
+        salary: formData.salary, license_number: formData.license_number, license_issue: formData.license_issue, license_expire: formData.license_expire,
+        classes: formData.classes || [], subjects: formData.subjects, hours1: formData.hours1 || {}, hours2: formData.hours2 || {}
+      };
+      const { error } = await supabase.from('profiles').update(updateData).eq('id', profile.id);
+      if (error) throw error;
       showToast('บันทึกข้อมูลส่วนที่ 1 สำเร็จแล้ว', 'success');
-    } catch (err) { 
-      showToast(err.message, 'error'); 
-    }
-    setIsSaving(false);
+      refreshProfile(); 
+    } catch (err) { showToast(err.message, 'error'); } 
+    finally { setIsSaving(false); }
   };
 
   const totalHours1 = Object.values(formData.hours1 || {}).reduce((acc, val) => acc + (Number(val) || 0), 0);
   const totalHours2 = Object.values(formData.hours2 || {}).reduce((acc, val) => acc + (Number(val) || 0), 0);
-  const paYear = appSettings?.paYear || 2567;
+  const paYear = appSettings?.pa_year || 2567;
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -589,31 +550,29 @@ function TeacherPart1({ profile, appSettings, showToast }) {
 
       <div className="glass-panel p-6 md:p-8 rounded-3xl bg-white/50 border border-white">
         <h3 className="text-lg font-bold text-blue-900 border-b border-gray-200 pb-3 mb-6 flex flex-col md:flex-row justify-between md:items-center gap-2">
-          <span className="flex items-center"><User className="mr-2 text-blue-600" size={20}/> ข้อมูลส่วนบุคคล</span>
-          <span className="text-xs md:text-sm text-red-600 font-medium bg-red-50/80 px-3 py-1 rounded-lg border border-red-100 flex items-center"><AlertCircle size={14} className="mr-1"/>ข้อมูลส่วนนี้ตั้งค่าโดย Admin เท่านั้น</span>
+          <span className="flex items-center"><User className="mr-2 text-blue-600" size={20}/> ข้อมูลส่วนบุคคล (แก้ได้ด้วยตนเอง)</span>
         </h3>
         
         <div className="flex flex-col md:flex-row gap-8 mb-8 bg-white/40 p-6 rounded-2xl border border-white">
            <div className="silver-frame rounded-xl w-32 h-44 flex-shrink-0 flex items-center justify-center mx-auto md:mx-0 overflow-hidden bg-gray-100">
-             {profile?.photoUrl ? <img src={profile?.photoUrl} className="w-full h-full object-cover rounded-lg" /> : <User size={48} className="text-gray-300" />}
+             {profile?.photo_url ? <img src={profile?.photo_url} className="w-full h-full object-cover rounded-lg" /> : <User size={48} className="text-gray-300" />}
            </div>
            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <div><label className="block text-sm font-bold text-gray-500 mb-1">คำนำหน้า</label><div className="px-4 py-3 bg-gray-50/80 rounded-xl text-gray-800 font-bold border border-gray-200/60 shadow-sm">{profile?.title || '-'}</div></div>
-              <div><label className="block text-sm font-bold text-gray-500 mb-1">ชื่อ</label><div className="px-4 py-3 bg-gray-50/80 rounded-xl text-gray-800 font-bold border border-gray-200/60 shadow-sm">{profile?.firstName || '-'}</div></div>
-              <div><label className="block text-sm font-bold text-gray-500 mb-1">นามสกุล</label><div className="px-4 py-3 bg-gray-50/80 rounded-xl text-gray-800 font-bold border border-gray-200/60 shadow-sm">{profile?.lastName || '-'}</div></div>
-              <div><label className="block text-sm font-bold text-gray-500 mb-1">ตำแหน่ง</label><div className="px-4 py-3 bg-blue-50/80 rounded-xl text-blue-800 font-bold border border-blue-100 shadow-sm">{profile?.position || 'ครู'}</div></div>
-              <div><label className="block text-sm font-bold text-gray-500 mb-1">วิทยฐานะ</label><div className="px-4 py-3 bg-gray-50/80 rounded-xl text-gray-800 font-bold border border-gray-200/60 shadow-sm">{profile?.standing || '-'}</div></div>
-              <div><label className="block text-sm font-bold text-gray-500 mb-1">กลุ่มสาระฯ</label><div className="px-4 py-3 bg-gray-50/80 rounded-xl text-gray-800 font-bold border border-gray-200/60 shadow-sm">{profile?.department || '-'}</div></div>
-              <div className="md:col-span-3 lg:col-span-1"><label className="block text-sm font-bold text-gray-500 mb-1">ครูที่ปรึกษา</label><div className="px-4 py-3 bg-green-50/80 rounded-xl text-green-800 font-bold border border-green-100 shadow-sm">{profile?.advisorGrade ? `ชั้น ${profile.advisorGrade} ห้อง ${profile.advisorRoom || '-'}` : 'ไม่ได้เป็นครูที่ปรึกษา'}</div></div>
+              <div><label className="block text-sm font-bold text-gray-500 mb-1">คำนำหน้า</label><input type="text" name="title" value={formData.title || ''} onChange={handleChange} className="glass-input w-full px-4 py-3 bg-white rounded-xl text-gray-800 font-bold border border-gray-200 shadow-sm" /></div>
+              <div><label className="block text-sm font-bold text-gray-500 mb-1">ชื่อ</label><input type="text" name="first_name" value={formData.first_name || ''} onChange={handleChange} className="glass-input w-full px-4 py-3 bg-white rounded-xl text-gray-800 font-bold border border-gray-200 shadow-sm" /></div>
+              <div><label className="block text-sm font-bold text-gray-500 mb-1">นามสกุล</label><input type="text" name="last_name" value={formData.last_name || ''} onChange={handleChange} className="glass-input w-full px-4 py-3 bg-white rounded-xl text-gray-800 font-bold border border-gray-200 shadow-sm" /></div>
+              
+              <div><label className="block text-sm font-bold text-gray-500 mb-1">ตำแหน่ง (Admin แก้ไข)</label><div className="px-4 py-3 bg-gray-100 rounded-xl text-gray-500 font-bold border border-gray-200">{profile?.position || 'ครู'}</div></div>
+              <div className="md:col-span-2"><label className="block text-sm font-bold text-gray-500 mb-1">กลุ่มสาระฯ (Admin แก้ไข)</label><div className="px-4 py-3 bg-gray-100 rounded-xl text-gray-500 font-bold border border-gray-200">{profile?.department || '-'}</div></div>
            </div>
         </div>
 
         <h3 className="text-lg font-bold text-blue-900 border-b border-gray-200 pb-3 mb-6 flex items-center"><Edit className="mr-2 text-blue-600" size={20}/> ข้อมูลที่ต้องกรอกเพิ่มเติม</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white/40 p-6 rounded-2xl border border-white">
           <div><label className="block text-sm font-bold text-gray-700 mb-2">อัตราเงินเดือนปัจจุบัน (บาท)</label><input type="number" name="salary" value={formData.salary || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" placeholder="ตัวเลขเท่านั้น" /></div>
-          <div><label className="block text-sm font-bold text-gray-700 mb-2">เลขที่ใบอนุญาตประกอบวิชาชีพครู (14 หลัก)</label><input type="text" name="licenseNumber" maxLength={14} value={formData.licenseNumber || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" placeholder="กรอกเลข 14 หลัก" /></div>
-          <div><label className="block text-sm font-bold text-gray-700 mb-2">วันออกใบอนุญาต</label><input type="date" name="licenseIssue" value={formData.licenseIssue || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" /></div>
-          <div><label className="block text-sm font-bold text-gray-700 mb-2">วันหมดอายุใบอนุญาต</label><input type="date" name="licenseExpire" value={formData.licenseExpire || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" /></div>
+          <div><label className="block text-sm font-bold text-gray-700 mb-2">เลขที่ใบอนุญาตประกอบวิชาชีพครู (14 หลัก)</label><input type="text" name="license_number" maxLength={14} value={formData.license_number || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" placeholder="กรอกเลข 14 หลัก" /></div>
+          <div><label className="block text-sm font-bold text-gray-700 mb-2">วันออกใบอนุญาต</label><input type="date" name="license_issue" value={formData.license_issue || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" /></div>
+          <div><label className="block text-sm font-bold text-gray-700 mb-2">วันหมดอายุใบอนุญาต</label><input type="date" name="license_expire" value={formData.license_expire || ''} onChange={handleChange} className="glass-input w-full px-4 py-3.5 rounded-xl font-bold bg-white shadow-sm" /></div>
         </div>
       </div>
 
@@ -666,27 +625,31 @@ function HourCard({ title, data, prefix, onChange, total }) {
   );
 }
 
-function TeacherPart2({ profile, showToast }) {
-  const [paData, setPaData] = useState({ issue: '', problem: '', method: '', resultQuantity: '', resultQuality: '' });
+function TeacherPart2({ profile, showToast, supabase }) {
+  const [paData, setPaData] = useState({ issue: '', problem: '', method: '', result_quantity: '', result_quality: '' });
   const [isSaving, setIsSaving] = useState(false);
   
   const standingKey = profile?.standing ? profile.standing.split(' (')[0] : 'ครู (ไม่มีวิทยฐานะ/คศ.1)';
   const expectation = STANDINGS_DESC[standingKey] || STANDINGS_DESC['ครู (ไม่มีวิทยฐานะ/คศ.1)'];
 
   useEffect(() => {
-    if (!profile?.uid) return;
-    const unsubscribe = onSnapshot(getDocRef('pa', profile.uid), (snap) => { if (snap.exists()) setPaData(snap.data()); });
-    return () => unsubscribe();
-  }, [profile?.uid]);
+    const fetchPA = async () => {
+      if (!profile?.id) return;
+      const { data } = await supabase.from('pa_data').select('*').eq('id', profile.id).single();
+      if (data) setPaData(data);
+    };
+    fetchPA();
+  }, [profile?.id]);
 
   const savePA = async () => {
     setIsSaving(true);
-    showToast('กำลังบันทึกประเด็นท้าทาย...', 'info');
+    showToast('กำลังบันทึกประเด็นท้าทาย...', 'loading');
     try {
-      await withTimeout(setDoc(getDocRef('pa', profile.uid), paData, { merge: true }));
+      const { error } = await supabase.from('pa_data').upsert({ id: profile.id, ...paData });
+      if (error) throw error;
       showToast('บันทึกประเด็นท้าทาย (ส่วนที่ 2) สำเร็จ', 'success');
     } catch (err) { showToast(err.message, 'error'); }
-    setIsSaving(false);
+    finally { setIsSaving(false); }
   };
 
   return (
@@ -728,11 +691,11 @@ function TeacherPart2({ profile, showToast }) {
           <div className="col-span-1 md:col-span-2 pb-2 border-b border-blue-200"><h3 className="font-bold text-blue-900 text-xl flex items-center"><BarChart className="mr-2" size={24}/> 3. ผลลัพธ์การพัฒนา</h3></div>
           <div>
             <label className="block font-bold text-gray-800 mb-3">3.1 เชิงปริมาณ (ร้อยละ, จำนวน)</label>
-            <textarea value={paData.resultQuantity || ''} onChange={(e) => setPaData({...paData, resultQuantity: e.target.value})} rows="4" className="glass-input w-full px-5 py-4 rounded-xl resize-none bg-white border border-gray-200" placeholder="เช่น ผู้เรียนร้อยละ 80 มีผลสัมฤทธิ์ทางการเรียนสูงขึ้น..." />
+            <textarea value={paData.result_quantity || ''} onChange={(e) => setPaData({...paData, result_quantity: e.target.value})} rows="4" className="glass-input w-full px-5 py-4 rounded-xl resize-none bg-white border border-gray-200" placeholder="เช่น ผู้เรียนร้อยละ 80 มีผลสัมฤทธิ์ทางการเรียนสูงขึ้น..." />
           </div>
           <div>
             <label className="block font-bold text-gray-800 mb-3">3.2 เชิงคุณภาพ (พฤติกรรม, ทักษะ)</label>
-            <textarea value={paData.resultQuality || ''} onChange={(e) => setPaData({...paData, resultQuality: e.target.value})} rows="4" className="glass-input w-full px-5 py-4 rounded-xl resize-none bg-white border border-gray-200" placeholder="เช่น ผู้เรียนสามารถนำความรู้ไปประยุกต์ใช้ในชีวิตประจำวันได้..." />
+            <textarea value={paData.result_quality || ''} onChange={(e) => setPaData({...paData, result_quality: e.target.value})} rows="4" className="glass-input w-full px-5 py-4 rounded-xl resize-none bg-white border border-gray-200" placeholder="เช่น ผู้เรียนสามารถนำความรู้ไปประยุกต์ใช้ในชีวิตประจำวันได้..." />
           </div>
         </div>
       </div>
@@ -740,65 +703,82 @@ function TeacherPart2({ profile, showToast }) {
   );
 }
 
-function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
+function SupervisorPanel({ profile, appSettings, usersMap, showToast, supabase }) {
   const [teachers, setTeachers] = useState([]);
   const [selectedDept, setSelectedDept] = useState('');
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedTask, setSelectedTask] = useState('');
-  const [tasksData, setTasksData] = useState({}); 
+  const [tasksData, setTasksData] = useState([]); 
   const [isProcessing, setIsProcessing] = useState(false);
   
-  const managedTasks = profile?.supervisorTasks || []; 
+  const managedTasks = profile?.supervisor_tasks || []; 
   const taskOptions = TASK_LIST.filter(t => managedTasks.includes(t.id));
 
-  useEffect(() => {
-    const unsubUsers = onSnapshot(query(getColl('users')), (snapshot) => {
-      const users = []; snapshot.forEach(doc => { if (doc.data().roles?.teacher) users.push(doc.data()); }); setTeachers(users);
-    });
-    const unsubTasks = onSnapshot(query(getColl('tasks')), (snapshot) => {
-      const tasksMap = {}; snapshot.forEach(doc => { tasksMap[doc.id] = doc.data(); }); setTasksData(tasksMap);
-    });
-    return () => { unsubUsers(); unsubTasks(); };
-  }, []);
+  const fetchSupervisorData = async () => {
+    const { data: usersData } = await supabase.from('profiles').select('*').eq('is_teacher', true);
+    if (usersData) setTeachers(usersData);
+
+    const { data: allTasks } = await supabase.from('tasks').select('*');
+    if (allTasks) setTasksData(allTasks);
+  };
+
+  useEffect(() => { fetchSupervisorData(); }, []);
+
+  const getStatus = (teacherId, taskId) => {
+    const record = tasksData.find(t => t.teacher_id === teacherId && t.task_id === taskId);
+    return record?.status || false;
+  };
 
   const handleCheck = async (teacherUid, taskId, currentStatus) => {
     const newStatus = !currentStatus;
-    setTasksData(prev => ({ ...prev, [teacherUid]: { ...(prev[teacherUid] || {}), [taskId]: { status: newStatus, supervisorId: newStatus ? profile.uid : null, timestamp: Date.now() } } }));
+    setTasksData(prev => {
+      const existing = prev.find(t => t.teacher_id === teacherUid && t.task_id === taskId);
+      if (existing) return prev.map(t => t.teacher_id === teacherUid && t.task_id === taskId ? {...t, status: newStatus} : t);
+      return [...prev, { teacher_id: teacherUid, task_id: taskId, status: newStatus, supervisor_id: profile.id }];
+    });
+
     try {
-      await withTimeout(setDoc(getDocRef('tasks', teacherUid), { [taskId]: { status: newStatus, supervisorId: newStatus ? profile.uid : null, timestamp: Date.now() } }, { merge: true }));
-      showToast(`บันทึกการส่งงานสำเร็จแล้ว`, 'success');
-    } catch (error) { showToast(error.message, "error"); }
+      const { error } = await supabase.from('tasks').upsert({
+        teacher_id: teacherUid, task_id: taskId, status: newStatus, supervisor_id: newStatus ? profile.id : null, timestamp: Date.now()
+      });
+      if (error) throw error;
+      showToast(`บันทึกสำเร็จ`, 'success');
+    } catch (error) { 
+      showToast(error.message, "error"); 
+      fetchSupervisorData(); 
+    }
   };
 
   const checkAll = async (status) => {
     if (!selectedTask) return;
     setIsProcessing(true);
-    showToast('กำลังประมวลผล...', 'info');
-    const filteredTeachers = teachers.filter(t => (!selectedDept || t.department === selectedDept) && (!selectedGrade || t.advisorGrade === selectedGrade));
+    showToast('กำลังประมวลผล...', 'loading');
+    const filteredTeachers = teachers.filter(t => (!selectedDept || t.department === selectedDept) && (!selectedGrade || t.advisor_grade === selectedGrade));
     
     try {
-      const promises = [];
-      for (const t of filteredTeachers) {
-         setTasksData(prev => ({ ...prev, [t.uid]: { ...(prev[t.uid] || {}), [selectedTask]: { status: status, supervisorId: status ? profile.uid : null, timestamp: Date.now() } } }));
-         promises.push(setDoc(getDocRef('tasks', t.uid), { [selectedTask]: { status: status, supervisorId: status ? profile.uid : null, timestamp: Date.now() } }, { merge: true }));
-      }
-      await withTimeout(Promise.all(promises));
-      showToast(`ทำรายการ ${status ? 'บันทึกส่งงาน' : 'ยกเลิก'} ทั้งหมดสำเร็จแล้ว`, 'success');
-    } catch (error) {
-      showToast(error.message, "error");
-    }
-    setIsProcessing(false);
+      const updates = filteredTeachers.map(t => ({
+        teacher_id: t.id, task_id: selectedTask, status: status, supervisor_id: status ? profile.id : null, timestamp: Date.now()
+      }));
+      const { error } = await supabase.from('tasks').upsert(updates);
+      if (error) throw error;
+      showToast(`ทำรายการสำเร็จ`, 'success');
+      fetchSupervisorData();
+    } catch (error) { showToast(error.message, "error"); } 
+    finally { setIsProcessing(false); }
   };
 
   if (managedTasks.length === 0) return <div className="glass-panel p-16 text-center rounded-3xl flex flex-col items-center bg-white/50 border border-white"><AlertCircle size={72} className="text-[#ED1C24] mb-6 opacity-80" /><h2 className="text-3xl font-bold mb-3 text-gray-800">ไม่มีสิทธิ์เข้าถึง</h2><p className="text-gray-600 text-lg font-medium">ติดต่อผู้ดูแลระบบเพื่อกำหนดสิทธิ์การเป็นหัวหน้าบันทึกการส่งงาน</p></div>;
 
-  const filteredTeachers = teachers.filter(t => (!selectedDept || t.department === selectedDept) && (!selectedGrade || t.advisorGrade === selectedGrade));
+  const filteredTeachers = teachers.filter(t => (!selectedDept || t.department === selectedDept) && (!selectedGrade || t.advisor_grade === selectedGrade));
 
   return (
     <div className="space-y-6 animate-fade-in-up">
       <div className="flex justify-between items-center flex-wrap gap-4 bg-white/60 p-5 rounded-3xl glass-panel no-print border border-white shadow-sm">
         <h2 className="text-2xl font-bold text-blue-900 flex items-center"><CheckSquare className="mr-3 text-green-600" />ระบบบันทึกการส่งภาระงาน</h2>
-        <button onClick={() => window.print()} className="bg-white hover:bg-gray-50 text-blue-900 px-6 py-3 rounded-xl flex items-center shadow-sm font-bold border border-gray-200 transition-all"><FileSpreadsheet size={20} className="mr-2" /> พิมพ์รายงาน</button>
+        <div className="flex gap-2">
+          <button onClick={fetchSupervisorData} className="bg-white hover:bg-gray-50 text-blue-600 px-4 py-3 rounded-xl flex items-center shadow-sm font-bold border border-gray-200 transition-all"><RefreshCw size={20} /></button>
+          <button onClick={() => window.print()} className="bg-white hover:bg-gray-50 text-blue-900 px-6 py-3 rounded-xl flex items-center shadow-sm font-bold border border-gray-200 transition-all"><FileSpreadsheet size={20} className="mr-2" /> พิมพ์รายงาน</button>
+        </div>
       </div>
       
       <div className="glass-panel p-6 rounded-3xl flex flex-wrap gap-4 items-end no-print bg-white/50 border border-white shadow-sm">
@@ -821,28 +801,28 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
               <thead><tr className="bg-blue-50/90 text-blue-900 border-b-2 border-blue-100"><th className="p-4 w-16 text-center font-bold">ลำดับ</th><th className="p-4 font-bold">ชื่อ - นามสกุล</th><th className="p-4 font-bold">กลุ่ม/ที่ปรึกษา</th><th className="p-4 text-center w-40 font-bold">สถานะการส่ง</th></tr></thead>
               <tbody>
                 {filteredTeachers.map((teacher, index) => {
-                  const isSent = tasksData[teacher.uid]?.[selectedTask]?.status || false;
+                  const isSent = getStatus(teacher.id, selectedTask);
                   return (
-                    <tr key={teacher.uid} className={`border-b border-gray-100 transition-colors ${isSent ? 'bg-green-50/40' : 'hover:bg-white/80'}`}>
+                    <tr key={teacher.id} className={`border-b border-gray-100 transition-colors ${isSent ? 'bg-green-50/40' : 'hover:bg-white/80'}`}>
                       <td className="p-4 text-center text-gray-500 font-bold">{index + 1}</td>
                       <td className="p-4">
                         <div className="flex items-center gap-4">
                           <div className="silver-frame w-14 h-16 rounded-md overflow-hidden bg-gray-100 flex-shrink-0">
-                            {teacher.photoUrl ? <img src={teacher.photoUrl} className="w-full h-full object-cover rounded-sm" /> : <User className="w-full h-full p-2 text-gray-400" />}
+                            {teacher.photo_url ? <img src={teacher.photo_url} className="w-full h-full object-cover rounded-sm" /> : <User className="w-full h-full p-2 text-gray-400" />}
                           </div>
                           <div>
-                            <div className="font-bold text-gray-800 text-base">{teacher.title}{teacher.firstName} {teacher.lastName}</div>
+                            <div className="font-bold text-gray-800 text-base">{teacher.title}{teacher.first_name} {teacher.last_name}</div>
                             <div className="text-xs text-blue-600 font-medium bg-blue-50 px-2 py-0.5 rounded inline-block mt-1 border border-blue-100">{teacher.position}</div>
                           </div>
                         </div>
                       </td>
                       <td className="p-4">
                          <div className="text-gray-600 font-medium text-sm">{teacher.department || '-'}</div>
-                         {teacher.advisorGrade && <div className="text-xs text-gray-500 font-bold mt-1">อ.ที่ปรึกษา: {teacher.advisorGrade}/{teacher.advisorRoom||'-'}</div>}
+                         {teacher.advisor_grade && <div className="text-xs text-gray-500 font-bold mt-1">อ.ที่ปรึกษา: {teacher.advisor_grade}/{teacher.advisor_room||'-'}</div>}
                       </td>
                       <td className="p-4 text-center">
                         <label className="relative inline-flex items-center cursor-pointer no-print group">
-                          <input type="checkbox" className="sr-only peer" checked={isSent} onChange={() => handleCheck(teacher.uid, selectedTask, isSent)} />
+                          <input type="checkbox" className="sr-only peer" checked={isSent} onChange={() => handleCheck(teacher.id, selectedTask, isSent)} />
                           <div className="w-14 h-7 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-green-500 shadow-sm group-hover:shadow-md"></div>
                         </label>
                         <div className="hidden print:block font-bold">{isSent ? <span className="text-green-600 flex items-center justify-center"><CheckCircle size={16} className="mr-1"/> ส่งแล้ว</span> : <span className="text-red-500 flex items-center justify-center"><X size={16} className="mr-1"/> ยังไม่ส่ง</span>}</div>
@@ -860,7 +840,7 @@ function SupervisorPanel({ profile, appSettings, usersMap, showToast }) {
   );
 }
 
-function AdminPanel({ showToast, appSettings }) {
+function AdminPanel({ profile, showToast, appSettings, closeToast, supabase }) {
   const [users, setUsers] = useState([]);
   const [activeAdminTab, setActiveAdminTab] = useState('users'); 
   const [editingUser, setEditingUser] = useState(null);
@@ -871,73 +851,87 @@ function AdminPanel({ showToast, appSettings }) {
 
   const [importText, setImportText] = useState('');
   const [importResult, setImportResult] = useState(null);
-  const [settingsForm, setSettingsForm] = useState({ paYear: appSettings.paYear, newDept: '' });
+  const [settingsForm, setSettingsForm] = useState({ paYear: appSettings.pa_year || 2567, newDept: '' });
 
-  useEffect(() => {
-    const unsub = onSnapshot(query(getColl('users')), (snapshot) => {
-      const u = []; snapshot.forEach(doc => u.push(doc.data())); setUsers(u);
-    });
-    return () => unsub();
-  }, []);
+  const fetchUsers = async () => {
+    const { data } = await supabase.from('profiles').select('*');
+    if (data) setUsers(data);
+  };
+
+  useEffect(() => { if (profile?.is_admin) fetchUsers(); }, [profile]);
 
   const handleRoleChange = async (uid, roleKey, value) => {
     try { 
-      await withTimeout(setDoc(getDocRef('users', uid), { roles: { [roleKey]: value } }, { merge: true })); 
+      const { error } = await supabase.from('profiles').update({ [roleKey]: value }).eq('id', uid);
+      if (error) throw error;
       showToast(`อัปเดตสิทธิ์สำเร็จแล้ว`, 'success'); 
+      fetchUsers();
     } catch (err) { showToast(err.message, 'error'); }
   };
 
   const handleSupervisorTaskChange = async (uid, taskId, isChecked) => {
     try {
-      const user = users.find(u => u.uid === uid);
-      let tasks = user.supervisorTasks || [];
+      const user = users.find(u => u.id === uid);
+      let tasks = user.supervisor_tasks || [];
       if (isChecked) tasks.push(taskId); else tasks = tasks.filter(id => id !== taskId);
-      await withTimeout(setDoc(getDocRef('users', uid), { supervisorTasks: tasks }, { merge: true }));
+      
+      const { error } = await supabase.from('profiles').update({ supervisor_tasks: tasks }).eq('id', uid);
+      if (error) throw error;
       showToast(`อัปเดตภาระงานสำเร็จแล้ว`, 'success');
+      fetchUsers();
     } catch (err) { showToast(err.message, 'error'); }
   };
 
   const openEditModal = (user) => {
     setIsManualAddMode(false);
     setEditFormData({ 
-      uid: user.uid, email: user.email, title: user.title || '', firstName: user.firstName || '', lastName: user.lastName || '',
-      standing: user.standing || 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: user.department || '', advisorGrade: user.advisorGrade || '', advisorRoom: user.advisorRoom || '', photoUrl: user.photoUrl || '',
-      supervisorTitle: user.supervisorTitle || '', roles: user.roles
+      id: user.id, email: user.email, title: user.title || '', first_name: user.first_name || '', last_name: user.last_name || '',
+      standing: user.standing || 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: user.department || '', advisor_grade: user.advisor_grade || '', advisor_room: user.advisor_room || '', photo_url: user.photo_url || '',
+      supervisor_title: user.supervisor_title || '', is_teacher: user.is_teacher, is_supervisor: user.is_supervisor, is_admin: user.is_admin
     });
   };
 
   const openAddUserModal = () => {
     setIsManualAddMode(true);
     setEditFormData({ 
-      uid: `pre_${Date.now()}`, email: '', password: '', title: '', firstName: '', lastName: '',
-      standing: 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: '', advisorGrade: '', advisorRoom: '', photoUrl: '', supervisorTitle: ''
+      email: '', password: '', title: '', first_name: '', last_name: '',
+      standing: 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: '', advisor_grade: '', advisor_room: '', photo_url: '', supervisor_title: ''
     });
   };
 
   const saveEditUser = async () => {
-    showToast('กำลังบันทึกข้อมูล...', 'info');
+    showToast('กำลังบันทึกข้อมูล...', 'loading');
     try {
       if (isManualAddMode) {
         if (!editFormData.email || !editFormData.email.includes('@')) { showToast('กรุณาระบุ Email ให้ถูกต้อง', 'error'); return; }
         if (!editFormData.password || editFormData.password.length < 6) { showToast('รหัสผ่านเริ่มต้นต้องมีอย่างน้อย 6 ตัวอักษร', 'error'); return; }
-        await withTimeout(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users', editFormData.uid), { ...editFormData, email: editFormData.email.toLowerCase() }));
+        
+        const { error } = await supabase.from('pre_users').insert({
+          email: editFormData.email.toLowerCase(), password: editFormData.password, title: editFormData.title,
+          first_name: editFormData.first_name, last_name: editFormData.last_name, standing: editFormData.standing,
+          department: editFormData.department, advisor_grade: editFormData.advisor_grade, advisor_room: editFormData.advisor_room
+        });
+        if (error) throw error;
         showToast('เพิ่มผู้ใช้งานใหม่ลงในระบบสำเร็จแล้ว', 'success');
       } else {
-        await withTimeout(setDoc(getDocRef('users', editFormData.uid), editFormData, { merge: true }));
+        const { error } = await supabase.from('profiles').update(editFormData).eq('id', editFormData.id);
+        if (error) throw error;
         showToast('บันทึกข้อมูลส่วนตัวสำเร็จแล้ว', 'success');
+        fetchUsers();
       }
       setEditFormData(null);
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) { showToast(err.message, 'error'); } 
+    finally { if (editFormData === null) closeToast(); }
   };
 
   const handleAdminImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setIsUploadingPhoto(true);
-    showToast('กำลังประมวลผลรูปภาพ...', 'info');
+    showToast('กำลังประมวลผลรูปภาพ...', 'loading');
     try {
       const base64Image = await compressImageToBase64(file, 400); 
-      setEditFormData(prev => ({ ...prev, photoUrl: base64Image }));
+      setEditFormData(prev => ({ ...prev, photo_url: base64Image }));
       showToast('อัปโหลดรูปภาพสำเร็จ (กรุณากดบันทึก)', 'success');
     } catch (err) { showToast(err.message, 'error'); } 
     finally { setIsUploadingPhoto(false); }
@@ -945,7 +939,7 @@ function AdminPanel({ showToast, appSettings }) {
 
   const processImport = async () => {
     if (!importText.trim()) { showToast('กรุณาวางข้อมูลก่อน', 'error'); return; }
-    showToast('กำลังนำเข้าข้อมูล...', 'info');
+    showToast('กำลังนำเข้าข้อมูล...', 'loading');
     const rows = importText.split('\n').filter(r => r.trim() !== '');
     let successCount = 0, failCount = 0, errors = [];
 
@@ -954,32 +948,41 @@ function AdminPanel({ showToast, appSettings }) {
       const cols = rows[i].split(separator).map(c => c.trim().replace(/^"|"$/g, '')); 
       if (cols.length < 6) continue; 
       
-      const [email, password, title, firstName, lastName, standing, department] = cols;
+      const [email, password, title, firstName, lastName, standing, department, advisorGrade, advisorRoom] = cols;
       const targetUser = users.find(u => u.email.toLowerCase() === email.toLowerCase());
 
       if (targetUser) {
         try {
-          await withTimeout(setDoc(getDocRef('users', targetUser.uid), { title: title || targetUser.title, firstName: firstName || targetUser.firstName, lastName: lastName || targetUser.lastName, standing: standing || targetUser.standing, department: department || targetUser.department }, { merge: true }), 5000);
+          await supabase.from('profiles').update({ 
+            title: title || targetUser.title || '', first_name: firstName || targetUser.first_name || '', last_name: lastName || targetUser.last_name || '', 
+            standing: standing || targetUser.standing || '', department: department || targetUser.department || '', advisor_grade: advisorGrade || targetUser.advisor_grade || '', advisor_room: advisorRoom || targetUser.advisor_room || ''
+          }).eq('id', targetUser.id);
           successCount++;
         } catch (err) { failCount++; errors.push(`${email}: ${err.message}`); }
       } else {
         if(!password) { failCount++; errors.push(`${email}: ไม่ได้กำหนดรหัสผ่านตั้งต้น`); continue; }
         try {
-          await withTimeout(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'pre_users', `pre_${Date.now()}_${i}`), { email: email.toLowerCase(), password, title, firstName, lastName, standing, department }), 5000);
+          await supabase.from('pre_users').upsert({ 
+            email: email.toLowerCase(), password, title: title || '', first_name: firstName || '', last_name: lastName || '', 
+            standing: standing || 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: department || '', advisor_grade: advisorGrade || '', advisor_room: advisorRoom || ''
+          });
           successCount++;
         } catch(err) { failCount++; errors.push(`${email}: บันทึกรอล็อกอินล้มเหลว`); }
       }
     }
     setImportResult({ success: successCount, fail: failCount, errors });
-    if (successCount > 0) showToast(`นำเข้า/สร้างรอ สำเร็จ ${successCount} รายการ`, 'success');
+    if (successCount > 0) { showToast(`นำเข้าสำเร็จ ${successCount} รายการ`, 'success'); fetchUsers(); }
     else showToast('นำเข้าไม่สำเร็จ โปรดตรวจสอบข้อมูล', 'error');
     setImportText('');
   };
 
   const saveSettings = async (key, value) => {
-    showToast('กำลังบันทึกการตั้งค่า...', 'info');
-    try { await withTimeout(setDoc(getDocRef('settings', 'system'), { [key]: value }, { merge: true })); showToast('บันทึกการตั้งค่าสำเร็จแล้ว', 'success'); } 
-    catch (err) { showToast(err.message, 'error'); }
+    showToast('กำลังบันทึกการตั้งค่า...', 'loading');
+    try { 
+      const { error } = await supabase.from('system_settings').update({ [key]: value }).eq('id', 'system');
+      if (error) throw error;
+      showToast('บันทึกการตั้งค่าสำเร็จแล้ว', 'success'); 
+    } catch (err) { showToast(err.message, 'error'); }
   };
 
   const addDept = () => {
@@ -994,6 +997,8 @@ function AdminPanel({ showToast, appSettings }) {
     saveSettings('departments', newArr);
     showToast(`ลบกลุ่มสาระฯ "${dept}" สำเร็จแล้ว`, 'success');
   };
+
+  if (!profile?.is_admin) return null;
 
   return (
     <div className="space-y-6 animate-fade-in-up relative">
@@ -1012,7 +1017,7 @@ function AdminPanel({ showToast, appSettings }) {
       {activeAdminTab === 'users' && (
         <div className="glass-panel rounded-3xl overflow-hidden shadow-lg border border-white">
           <div className="bg-white/60 p-4 border-b border-white flex justify-between items-center">
-             <h3 className="font-bold text-blue-900 text-lg flex items-center"><Users className="mr-2" size={20}/> รายชื่อครูในระบบ ({users.length} คน)</h3>
+             <h3 className="font-bold text-blue-900 text-lg flex items-center"><Users className="mr-2" size={20}/> รายชื่อครูในระบบ ({users.length} คน) <button onClick={fetchUsers} className="ml-2 p-1 text-gray-500 hover:text-blue-600"><RefreshCw size={16}/></button></h3>
              <button onClick={openAddUserModal} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-colors flex items-center"><UserPlus size={16} className="mr-1.5"/> เพิ่มผู้ใช้งานใหม่</button>
           </div>
           <div className="overflow-x-auto bg-white/60">
@@ -1025,52 +1030,48 @@ function AdminPanel({ showToast, appSettings }) {
               </thead>
               <tbody>
                 {users.map((u, i) => (
-                  <React.Fragment key={u.uid}>
+                  <React.Fragment key={u.id}>
                     <tr className="border-b border-gray-200/50 hover:bg-white/80 transition-colors bg-white/30">
                       <td className="p-5 text-center text-gray-500 font-bold">{i + 1}</td>
                       <td className="p-5">
                         <div className="flex items-center gap-4">
                            <div className="silver-frame w-14 h-16 rounded-md overflow-hidden bg-gray-100 flex-shrink-0">
-                             {u.photoUrl ? <img src={u.photoUrl} className="w-full h-full object-cover rounded-sm" /> : <User className="w-full h-full p-2 text-gray-400" />}
+                             {u.photo_url ? <img src={u.photo_url} className="w-full h-full object-cover rounded-sm" /> : <User className="w-full h-full p-2 text-gray-400" />}
                            </div>
                            <div>
                               <div className="font-bold text-blue-900 text-base">{u.email}</div>
                               <div className="text-sm font-medium mt-1 flex flex-col gap-1">
-                                {u.firstName ? <span className="text-gray-800">{u.title}{u.firstName} {u.lastName}</span> : <span className="text-red-500 bg-red-50 px-2 py-0.5 rounded text-xs inline-block w-max">ยังไม่กรอกข้อมูล</span>}
-                                {u.roles?.supervisor && u.supervisorTitle && <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-100 w-max">{u.supervisorTitle}</span>}
+                                {u.first_name ? <span className="text-gray-800">{u.title}{u.first_name} {u.last_name}</span> : <span className="text-red-500 bg-red-50 px-2 py-0.5 rounded text-xs inline-block w-max">ยังไม่กรอกข้อมูล</span>}
+                                {u.is_supervisor && u.supervisor_title && <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-100 w-max">{u.supervisor_title}</span>}
                               </div>
                            </div>
                         </div>
                       </td>
                       <td className="p-5 text-center">
-                        <button onClick={() => openEditModal(u)} className="bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center justify-center mx-auto transition-colors">
-                          <Edit size={16} className="mr-1.5"/> แก้ไขข้อมูล
-                        </button>
+                        <button onClick={() => openEditModal(u)} className="bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center justify-center mx-auto transition-colors"><Edit size={16} className="mr-1.5"/> แก้ไขข้อมูล</button>
                       </td>
                       <td className="p-5">
                         <div className="flex flex-col gap-2 items-start pl-4">
-                          <label className="flex items-center text-sm cursor-pointer bg-white px-3 py-1.5 rounded-lg border border-gray-100 shadow-sm w-full"><input type="checkbox" checked={u.roles?.teacher || false} onChange={(e)=>handleRoleChange(u.uid, 'teacher', e.target.checked)} className="mr-3 w-4 h-4 rounded text-blue-600 focus:ring-blue-500" /> <span className="font-bold text-gray-700">Teacher</span></label>
-                          <label className="flex items-center text-sm cursor-pointer bg-green-50 px-3 py-1.5 rounded-lg border border-green-100 shadow-sm w-full"><input type="checkbox" checked={u.roles?.supervisor || false} onChange={(e)=>handleRoleChange(u.uid, 'supervisor', e.target.checked)} className="mr-3 w-4 h-4 rounded text-green-600 focus:ring-green-500" /> <span className="font-bold text-green-700">Supervisor</span></label>
-                          <label className="flex items-center text-sm cursor-pointer bg-red-50 px-3 py-1.5 rounded-lg border border-red-100 shadow-sm w-full"><input type="checkbox" checked={u.roles?.admin || false} onChange={(e)=>handleRoleChange(u.uid, 'admin', e.target.checked)} className="mr-3 w-4 h-4 rounded text-red-600 focus:ring-red-500" /> <span className="font-bold text-red-700">Admin</span></label>
+                          <label className="flex items-center text-sm cursor-pointer bg-white px-3 py-1.5 rounded-lg border border-gray-100 shadow-sm w-full"><input type="checkbox" checked={u.is_teacher || false} onChange={(e)=>handleRoleChange(u.id, 'is_teacher', e.target.checked)} className="mr-3 w-4 h-4 rounded text-blue-600 focus:ring-blue-500" /> <span className="font-bold text-gray-700">Teacher</span></label>
+                          <label className="flex items-center text-sm cursor-pointer bg-green-50 px-3 py-1.5 rounded-lg border border-green-100 shadow-sm w-full"><input type="checkbox" checked={u.is_supervisor || false} onChange={(e)=>handleRoleChange(u.id, 'is_supervisor', e.target.checked)} className="mr-3 w-4 h-4 rounded text-green-600 focus:ring-green-500" /> <span className="font-bold text-green-700">Supervisor</span></label>
+                          <label className="flex items-center text-sm cursor-pointer bg-red-50 px-3 py-1.5 rounded-lg border border-red-100 shadow-sm w-full"><input type="checkbox" checked={u.is_admin || false} onChange={(e)=>handleRoleChange(u.id, 'is_admin', e.target.checked)} className="mr-3 w-4 h-4 rounded text-red-600 focus:ring-red-500" /> <span className="font-bold text-red-700">Admin</span></label>
                         </div>
                       </td>
                       <td className="p-5 text-center">
-                        {u.roles?.supervisor ? (
-                          <button onClick={() => setEditingUser(editingUser === u.uid ? null : u.uid)} className={`px-5 py-2 rounded-xl text-sm font-bold shadow-sm transition-all border ${editingUser === u.uid ? 'bg-gray-800 text-white border-gray-800' : 'bg-green-100 text-green-800 hover:bg-green-200 border-green-200'}`}>
-                            {editingUser === u.uid ? 'ปิดแผงตั้งค่า' : 'ตั้งค่างานรับผิดชอบ'}
-                          </button>
+                        {u.is_supervisor ? (
+                          <button onClick={() => setEditingUser(editingUser === u.id ? null : u.id)} className={`px-5 py-2 rounded-xl text-sm font-bold shadow-sm transition-all border ${editingUser === u.id ? 'bg-gray-800 text-white border-gray-800' : 'bg-green-100 text-green-800 hover:bg-green-200 border-green-200'}`}>{editingUser === u.id ? 'ปิดแผงตั้งค่า' : 'ตั้งค่างานรับผิดชอบ'}</button>
                         ) : <span className="text-gray-400 text-sm font-medium bg-gray-100 px-3 py-1 rounded-lg border border-gray-200">ไม่มีสิทธิ์</span>}
                       </td>
                     </tr>
                     
-                    {editingUser === u.uid && u.roles?.supervisor && (
+                    {editingUser === u.id && u.is_supervisor && (
                       <tr className="bg-gradient-to-r from-green-50/80 to-blue-50/80">
                         <td colSpan="5" className="p-8 border-b-2 border-green-200 shadow-inner">
-                          <div className="font-bold text-blue-900 mb-4 text-lg flex items-center"><CheckSquare className="mr-2 text-green-600"/> เลือกภาระงานที่มอบหมายให้ <span className="text-green-700 mx-2">{u.firstName || u.email}</span> เป็นหัวหน้าบันทึกการส่ง:</div>
+                          <div className="font-bold text-blue-900 mb-4 text-lg flex items-center"><CheckSquare className="mr-2 text-green-600"/> เลือกภาระงานที่มอบหมายให้ <span className="text-green-700 mx-2">{u.first_name || u.email}</span> เป็นหัวหน้าบันทึกการส่ง:</div>
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 bg-white/70 p-5 rounded-2xl border border-white shadow-sm">
                             {TASK_LIST.map(task => (
                               <label key={task.id} className="flex items-start text-sm p-3 hover:bg-white rounded-xl border border-transparent hover:border-blue-100 cursor-pointer transition-all shadow-sm">
-                                <input type="checkbox" checked={(u.supervisorTasks || []).includes(task.id)} onChange={(e) => handleSupervisorTaskChange(u.uid, task.id, e.target.checked)} className="mr-3 mt-0.5 w-4 h-4 text-green-600 rounded focus:ring-green-500" />
+                                <input type="checkbox" checked={(u.supervisor_tasks || []).includes(task.id)} onChange={(e) => handleSupervisorTaskChange(u.id, task.id, e.target.checked)} className="mr-3 mt-0.5 w-4 h-4 text-green-600 rounded focus:ring-green-500" />
                                 <span className="text-gray-800 font-medium leading-tight">{task.name}</span>
                               </label>
                             ))}
@@ -1098,7 +1099,7 @@ function AdminPanel({ showToast, appSettings }) {
              </div>
              <div className="flex gap-2 w-full md:w-auto">
                <input type="number" value={settingsForm.paYear} onChange={e=>setSettingsForm({...settingsForm, paYear: Number(e.target.value)})} className="glass-input px-4 py-2 rounded-xl font-bold w-32 text-center bg-white border-gray-300 shadow-sm" />
-               <button onClick={()=>saveSettings('paYear', settingsForm.paYear)} className="bg-blue-600 text-white px-5 py-2 rounded-xl font-bold shadow-sm hover:bg-blue-700">บันทึก</button>
+               <button onClick={()=>saveSettings('pa_year', settingsForm.paYear)} className="bg-blue-600 text-white px-5 py-2 rounded-xl font-bold shadow-sm hover:bg-blue-700">บันทึก</button>
              </div>
           </div>
 
@@ -1129,7 +1130,7 @@ function AdminPanel({ showToast, appSettings }) {
             <h3 className="font-bold text-blue-900 mb-3 text-lg">วิธีใช้งาน:</h3>
             <ol className="list-decimal list-inside text-base text-gray-700 space-y-2 font-medium">
               <li>เปิดไฟล์ Excel ของคุณ</li>
-              <li>จัดเรียงคอลัมน์ตามลำดับดังนี้: <strong className="text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-100">Email | รหัสผ่าน | คำนำหน้า | ชื่อ | นามสกุล | วิทยฐานะ | กลุ่มสาระฯ</strong></li>
+              <li>จัดเรียงคอลัมน์ตามลำดับ 9 คอลัมน์ดังนี้: <br/><strong className="text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-100 mt-2 inline-block">Email | รหัสผ่าน | คำนำหน้า | ชื่อ | นามสกุล | วิทยฐานะ | กลุ่มสาระฯ | ครูที่ปรึกษา(ชั้น) | ห้อง</strong></li>
               <li>วาง (Paste) ข้อมูลลงในกล่องด้านล่างแล้วกด "เริ่มนำเข้าข้อมูล"</li>
               <li className="text-[#ED1C24] pt-2 mt-2 border-t border-blue-100/50">หมายเหตุ: รหัสผ่าน จะใช้ได้เฉพาะคนที่ไม่เคย Login เข้าสู่ระบบมาก่อนเท่านั้น (สร้างบัญชีรอไว้)</li>
             </ol>
@@ -1138,14 +1139,12 @@ function AdminPanel({ showToast, appSettings }) {
           <textarea 
             value={importText} onChange={(e) => setImportText(e.target.value)} 
             className="w-full h-64 glass-input p-5 rounded-2xl font-mono text-sm resize-y bg-white/80 focus:bg-white transition-colors mb-6 shadow-inner border border-gray-200"
-            placeholder="test@sriracha.ac.th   1234567890   นาย   สมชาย   ใจดี   ครูชำนาญการ (คศ.2)   วิทยาศาสตร์และเทคโนโลยี"
+            placeholder="test@sriracha.ac.th   1234567890   นาย   สมชาย   ใจดี   ครูชำนาญการ (คศ.2)   วิทยาศาสตร์และเทคโนโลยี   ม.1   1"
           ></textarea>
 
           <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
              <button onClick={() => setImportText('')} className="px-6 py-3 text-gray-600 hover:bg-gray-100 rounded-xl transition-colors font-bold">ล้างข้อมูล</button>
-             <button onClick={processImport} className="bg-gradient-to-r from-[#00529B] to-blue-700 text-white px-8 py-3 rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center">
-               <Upload size={20} className="mr-2"/> เริ่มนำเข้าข้อมูล
-             </button>
+             <button onClick={processImport} className="bg-gradient-to-r from-[#00529B] to-blue-700 text-white px-8 py-3 rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center"><Upload size={20} className="mr-2"/> เริ่มนำเข้าข้อมูล</button>
           </div>
 
           {importResult && (
@@ -1155,11 +1154,7 @@ function AdminPanel({ showToast, appSettings }) {
                 <div className="bg-white p-4 rounded-xl border border-green-100 flex items-center"><CheckCircle className="text-green-500 mr-3" size={24}/><span className="font-bold text-gray-700">สำเร็จ (อัปเดต/สร้างรอ): <span className="text-green-600 text-xl">{importResult.success}</span></span></div>
                 <div className="bg-white p-4 rounded-xl border border-red-100 flex items-center"><AlertCircle className="text-red-500 mr-3" size={24}/><span className="font-bold text-gray-700">ล้มเหลว (ข้อมูลผิด): <span className="text-red-600 text-xl">{importResult.fail}</span></span></div>
               </div>
-              {importResult.errors.length > 0 && (
-                <ul className="mt-4 text-sm text-red-600 max-h-40 overflow-y-auto list-disc list-inside bg-white p-4 rounded-xl border border-red-100 font-medium">
-                  {importResult.errors.map((err, i) => <li key={i}>{err}</li>)}
-                </ul>
-              )}
+              {importResult.errors.length > 0 && <ul className="mt-4 text-sm text-red-600 max-h-40 overflow-y-auto list-disc list-inside bg-white p-4 rounded-xl border border-red-100 font-medium">{importResult.errors.map((err, i) => <li key={i}>{err}</li>)}</ul>}
             </div>
           )}
         </div>
@@ -1170,7 +1165,7 @@ function AdminPanel({ showToast, appSettings }) {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
           <div className="glass-panel w-full max-w-2xl p-0 rounded-3xl overflow-hidden shadow-2xl bg-white/95 border border-white">
             <div className={`p-5 flex justify-between items-center text-white ${isManualAddMode ? 'bg-gradient-to-r from-green-600 to-green-700' : 'bg-gradient-to-r from-[#00529B] to-blue-800'}`}>
-              <h3 className="font-bold text-xl flex items-center">{isManualAddMode ? <UserPlus className="mr-2"/> : <Edit className="mr-2"/>} {isManualAddMode ? 'เพิ่มรายชื่อผู้ใช้งานใหม่' : `แก้ไขข้อมูล: ${editFormData.firstName || 'ผู้ใช้งาน'}`}</h3>
+              <h3 className="font-bold text-xl flex items-center">{isManualAddMode ? <UserPlus className="mr-2"/> : <Edit className="mr-2"/>} {isManualAddMode ? 'เพิ่มรายชื่อผู้ใช้งานใหม่' : `แก้ไขข้อมูล: ${editFormData.first_name || 'ผู้ใช้งาน'}`}</h3>
               <button onClick={() => setEditFormData(null)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors"><X size={24} /></button>
             </div>
             
@@ -1185,7 +1180,7 @@ function AdminPanel({ showToast, appSettings }) {
               <div className="flex flex-col md:flex-row gap-8 mb-8">
                 <div className="flex flex-col items-center">
                   <div className="silver-frame w-32 h-44 rounded-xl overflow-hidden flex flex-col items-center justify-center relative group shadow-sm bg-gray-100">
-                     {editFormData.photoUrl ? <img src={editFormData.photoUrl} className="w-full h-full object-cover rounded-lg" /> : <User size={48} className="text-gray-300" />}
+                     {editFormData.photo_url ? <img src={editFormData.photo_url} className="w-full h-full object-cover rounded-lg" /> : <User size={48} className="text-gray-300" />}
                      <label className="absolute inset-0 bg-blue-900/60 backdrop-blur-sm flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity rounded-lg">
                        <Upload className="text-white mb-2" size={28} /> <span className="text-white text-sm font-bold">อัปโหลดรูป</span>
                        <input type="file" accept="image/*" className="hidden" onChange={handleAdminImageUpload} disabled={isUploadingPhoto} />
@@ -1205,22 +1200,22 @@ function AdminPanel({ showToast, appSettings }) {
 
                   {isManualAddMode && <div><label className="block text-sm font-bold text-gray-700 mb-2">คำนำหน้า</label><select value={editFormData.title} onChange={(e) => setEditFormData({...editFormData, title: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold"><option value="">-- เลือก --</option><option value="นาย">นาย</option><option value="นาง">นาง</option><option value="นางสาว">นางสาว</option><option value="ว่าที่ ร.ต.">ว่าที่ ร.ต.</option></select></div>}
 
-                  <div><label className="block text-sm font-bold text-gray-700 mb-2">ชื่อ</label><input type="text" value={editFormData.firstName} onChange={(e) => setEditFormData({...editFormData, firstName: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold" /></div>
-                  <div><label className="block text-sm font-bold text-gray-700 mb-2">นามสกุล</label><input type="text" value={editFormData.lastName} onChange={(e) => setEditFormData({...editFormData, lastName: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold" /></div>
+                  <div><label className="block text-sm font-bold text-gray-700 mb-2">ชื่อ</label><input type="text" value={editFormData.first_name} onChange={(e) => setEditFormData({...editFormData, first_name: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold" /></div>
+                  <div><label className="block text-sm font-bold text-gray-700 mb-2">นามสกุล</label><input type="text" value={editFormData.last_name} onChange={(e) => setEditFormData({...editFormData, last_name: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold" /></div>
                   <div><label className="block text-sm font-bold text-gray-700 mb-2">วิทยฐานะ</label><select value={editFormData.standing} onChange={(e) => setEditFormData({...editFormData, standing: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold">{Object.keys(STANDINGS_DESC).map(s => <option key={s} value={s}>{s}</option>)}</select></div>
                   <div className={`${isManualAddMode ? '' : 'md:col-span-2'}`}><label className="block text-sm font-bold text-gray-700 mb-2">กลุ่มสาระการเรียนรู้/กลุ่มงาน</label><select value={editFormData.department} onChange={(e) => setEditFormData({...editFormData, department: e.target.value})} className="w-full p-3.5 rounded-xl border border-gray-300 bg-white shadow-sm font-bold"><option value="">-- เลือก --</option>{appSettings.departments.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
                   
                   <div className="md:col-span-2 bg-blue-50/80 p-4 rounded-xl border border-blue-200 flex gap-4 shadow-sm mt-2">
-                     <div className="flex-1"><label className="block text-xs font-bold text-blue-900 mb-2">ครูที่ปรึกษา (ชั้น)</label><select value={editFormData.advisorGrade} onChange={(e) => setEditFormData({...editFormData, advisorGrade: e.target.value})} className="w-full p-2.5 rounded-lg border border-gray-300 bg-white shadow-sm font-bold"><option value="">-- ไม่เป็นที่ปรึกษา --</option>{GRADES.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
-                     <div className="flex-1"><label className="block text-xs font-bold text-blue-900 mb-2">ห้อง</label><select value={editFormData.advisorRoom} onChange={(e) => setEditFormData({...editFormData, advisorRoom: e.target.value})} className="w-full p-2.5 rounded-lg border border-gray-300 bg-white shadow-sm font-bold"><option value="">-- ไม่ระบุ --</option>{ROOMS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                     <div className="flex-1"><label className="block text-xs font-bold text-blue-900 mb-2">ครูที่ปรึกษา (ชั้น)</label><select value={editFormData.advisor_grade} onChange={(e) => setEditFormData({...editFormData, advisor_grade: e.target.value})} className="w-full p-2.5 rounded-lg border border-gray-300 bg-white shadow-sm font-bold"><option value="">-- ไม่เป็นที่ปรึกษา --</option>{GRADES.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+                     <div className="flex-1"><label className="block text-xs font-bold text-blue-900 mb-2">ห้อง</label><select value={editFormData.advisor_room} onChange={(e) => setEditFormData({...editFormData, advisor_room: e.target.value})} className="w-full p-2.5 rounded-lg border border-gray-300 bg-white shadow-sm font-bold"><option value="">-- ไม่ระบุ --</option>{ROOMS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
                   </div>
                 </div>
               </div>
 
-              {!isManualAddMode && editFormData.roles?.supervisor && (
+              {!isManualAddMode && editFormData.is_supervisor && (
                 <div className="mb-6 p-5 bg-green-50/50 border border-green-200 rounded-2xl">
                   <h4 className="font-bold text-green-800 flex items-center mb-3"><CheckSquare size={18} className="mr-2"/> ตั้งค่าตำแหน่งหัวหน้างาน (นำไปแสดงในรายงานการส่งงาน)</h4>
-                  <div><input type="text" value={editFormData.supervisorTitle} onChange={(e) => setEditFormData({...editFormData, supervisorTitle: e.target.value})} className="w-full p-3.5 rounded-xl border border-green-300 bg-white shadow-sm font-bold" placeholder="เช่น หัวหน้ากลุ่มสาระฯ ภาษาไทย, หัวหน้างานวิชาการ ฯลฯ" /></div>
+                  <div><input type="text" value={editFormData.supervisor_title} onChange={(e) => setEditFormData({...editFormData, supervisor_title: e.target.value})} className="w-full p-3.5 rounded-xl border border-green-300 bg-white shadow-sm font-bold" placeholder="เช่น หัวหน้ากลุ่มสาระฯ ภาษาไทย, หัวหน้างานวิชาการ ฯลฯ" /></div>
                 </div>
               )}
 
