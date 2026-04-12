@@ -178,8 +178,8 @@ export default function App() {
       let { data: userProfile } = await supabase.from('profiles').select('*').eq('id', userId).single();
       
       if (!userProfile) {
-        // ค้นหาใน pre_users
-        const { data: preUser } = await supabase.from('pre_users').select('*').eq('email', email.toLowerCase()).single();
+        // ค้นหาใน profiles
+        const { data: preUser } = await supabase.from('profiles').select('*').eq('email', email.toLowerCase()).single();
         const { data: allProfiles } = await supabase.from('profiles').select('id');
         const isFirstUser = !allProfiles || allProfiles.length === 0;
 
@@ -187,7 +187,7 @@ export default function App() {
 
         if (preUser) {
           newProfile = { ...newProfile, first_name: preUser.first_name, last_name: preUser.last_name, title: preUser.title, standing: preUser.standing, department: preUser.department, advisor_grade: preUser.advisor_grade, advisor_room: preUser.advisor_room };
-          await supabase.from('pre_users').delete().eq('email', email.toLowerCase());
+          await supabase.from('profiles').delete().eq('email', email.toLowerCase());
         }
         const { data: insertedProfile } = await supabase.from('profiles').insert(newProfile).select().single();
         userProfile = insertedProfile;
@@ -258,7 +258,7 @@ function Login({ showToast, closeToast, supabase }) {
 
       if (error) {
         if (error.message.includes('Invalid login credentials')) {
-          const { data: preUser } = await supabase.from('pre_users').select('*').eq('email', email.toLowerCase()).single();
+          const { data: preUser } = await supabase.from('profiles').select('*').eq('email', email.toLowerCase()).single();
           if (preUser) {
             if (preUser.password !== password) { showToast('รหัสผ่านเริ่มต้นไม่ถูกต้อง', 'error'); setIsLoading(false); return; }
             const { error: signUpError } = await supabase.auth.signUp({ email: email.toLowerCase(), password: password });
@@ -906,7 +906,7 @@ function AdminPanel({ profile, showToast, appSettings, closeToast, supabase }) {
         if (!editFormData.email || !editFormData.email.includes('@')) { showToast('กรุณาระบุ Email ให้ถูกต้อง', 'error'); return; }
         if (!editFormData.password || editFormData.password.length < 6) { showToast('รหัสผ่านเริ่มต้นต้องมีอย่างน้อย 6 ตัวอักษร', 'error'); return; }
         
-        const { error } = await supabase.from('pre_users').insert({
+        const { error } = await supabase.from('profiles').insert({
           email: editFormData.email.toLowerCase(), password: editFormData.password, title: editFormData.title,
           first_name: editFormData.first_name, last_name: editFormData.last_name, standing: editFormData.standing,
           department: editFormData.department, advisor_grade: editFormData.advisor_grade, advisor_room: editFormData.advisor_room
@@ -962,7 +962,7 @@ function AdminPanel({ profile, showToast, appSettings, closeToast, supabase }) {
       } else {
         if(!password) { failCount++; errors.push(`${email}: ไม่ได้กำหนดรหัสผ่านตั้งต้น`); continue; }
         try {
-          await supabase.from('pre_users').upsert({ 
+          await supabase.from('profiles').upsert({ 
             email: email.toLowerCase(), password, title: title || '', first_name: firstName || '', last_name: lastName || '', 
             standing: standing || 'ครู (ไม่มีวิทยฐานะ/คศ.1)', department: department || '', advisor_grade: advisorGrade || '', advisor_room: advisorRoom || ''
           });
