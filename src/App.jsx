@@ -13,7 +13,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_UQdwrtJ7S9mQ58FZf-K-Pg_cNYZ7D0-';
 const isSupabaseConfigured = SUPABASE_URL.startsWith('http');
 let supabase = null;
 
-// --- Constants (กำหนดค่าเริ่มต้นที่ไม่มีในฐานข้อมูล) ---
+// --- Constants ---
 const TASK_LIST = [
   { id: 't1', name: '1. หลักสูตรกลุ่มสาระฯ' }, { id: 't2', name: '2. รายงานการใช้หลักสูตร' },
   { id: 't3', name: '3. แผนการสอนภาคเรียนที่ 1' }, { id: 't4', name: '4. บันทึกหลังสอนภาคเรียนที่ 1' },
@@ -26,22 +26,12 @@ const TASK_LIST = [
   { id: 't17', name: '17. SAR' }, { id: 't18', name: '18. เครือข่ายผู้ปกครองนักเรียน' }
 ];
 
-const STANDINGS_DESC = {
-  'ครูผู้ช่วย': { label: 'ปฏิบัติและเรียนรู้ (Focus and Learn)' },
-  'ครู (ไม่มีวิทยฐานะ/คศ.1)': { label: 'ปรับประยุกต์ (Apply and Adapt)' },
-  'ครูชำนาญการ (คศ.2)': { label: 'แก้ไขปัญหา (Solve the Problem)' },
-  'ครูชำนาญการพิเศษ (คศ.3)': { label: 'ริเริ่มพัฒนา (Initiate and Develop)' },
-  'ครูเชี่ยวชาญ (คศ.4)': { label: 'คิดค้นและปรับเปลี่ยน (Invent and Transform)' },
-  'ครูเชี่ยวชาญพิเศษ (คศ.5)': { label: 'สร้างการเปลี่ยนแปลง (Create an Impact)' }
-};
-
 const DEPARTMENTS = [
   'ภาษาไทย', 'คณิตศาสตร์', 'วิทยาศาสตร์และเทคโนโลยี', 'สังคมศึกษา ศาสนาและวัฒนธรรม',
   'สุขศึกษาและพลศึกษา', 'ศิลปะ', 'การงานอาชีพ', 'ภาษาต่างประเทศ', 'กิจกรรมพัฒนาผู้เรียน'
 ];
 
 const GRADES = ['ม.1', 'ม.2', 'ม.3', 'ม.4', 'ม.5', 'ม.6'];
-const ROOMS = Array.from({length: 15}, (_, i) => (i + 1).toString());
 
 // --- Main App Component ---
 export default function App() {
@@ -51,7 +41,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [appSettings, setAppSettings] = useState({ academic_year: '2567' });
 
-  // โหลด CSS และ SweetAlert2
   useEffect(() => {
     const style = document.createElement('style');
     style.innerHTML = `
@@ -67,7 +56,6 @@ export default function App() {
     `;
     document.head.appendChild(style);
 
-    // ฝัง SweetAlert2 ถ้าไม่มี
     if (!window.Swal) {
       const swalScript = document.createElement('script');
       swalScript.src = "https://cdn.jsdelivr.net/npm/sweetalert2@11";
@@ -75,7 +63,6 @@ export default function App() {
     }
   }, []);
 
-  // โหลด Supabase Client
   useEffect(() => {
     const loadSupabase = () => {
       if (window.supabase && isSupabaseConfigured) {
@@ -94,13 +81,15 @@ export default function App() {
     loadSupabase();
   }, []);
 
-  // ฟังก์ชันแจ้งเตือน
-  const showToast = (msg, type = 'success') => {
+  const showToast = (msg, type = 'success', htmlContent = null) => {
     if (window.Swal) {
       if (type === 'loading') {
         window.Swal.fire({ title: msg, allowOutsideClick: false, didOpen: () => window.Swal.showLoading() });
       } else {
-        window.Swal.fire({ icon: type, title: type==='success'?'สำเร็จ':'แจ้งเตือน', text: msg, timer: 2000, showConfirmButton: type==='error', confirmButtonColor: '#00529B' });
+        const config = { icon: type, title: type === 'success' ? 'สำเร็จ' : 'แจ้งเตือน', showConfirmButton: type === 'error', confirmButtonColor: '#00529B', width: htmlContent ? '500px' : undefined };
+        if (htmlContent) config.html = htmlContent;
+        else { config.text = msg; if(type === 'success') config.timer = 2000; }
+        window.Swal.fire(config);
       }
     } else {
       if (type !== 'loading') alert(msg);
@@ -108,20 +97,14 @@ export default function App() {
   };
   const closeToast = () => { if (window.Swal) window.Swal.close(); };
 
-  // โหลดข้อมูล Profile
   const fetchProfile = async (userId, email) => {
     try {
       const { data: userProfile } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      
-      if (userProfile) {
-        setProfile(userProfile);
-      } else {
-        // กรณีไม่มีโปรไฟล์ ให้สร้างจำลองไว้ก่อน
-        setProfile({ id: userId, email: email, is_teacher: true, is_supervisor: false, is_admin: false });
-      }
+      if (userProfile) setProfile(userProfile);
+      else setProfile({ id: userId, email: email, is_teacher: true, is_supervisor: false, is_admin: false }); // Mock profile if not exists
     } catch (err) {
       console.error(err);
-      showToast('ไม่สามารถโหลดข้อมูลส่วนตัวได้', 'error');
+      setProfile({ id: userId, email: email, is_teacher: true, is_supervisor: false, is_admin: false }); // Fallback
     } finally {
       setLoading(false);
     }
@@ -134,7 +117,6 @@ export default function App() {
     } catch (err) { console.log('Using default settings'); }
   };
 
-  // จัดการ Session (Login/Logout)
   useEffect(() => {
     if (!supabaseLoaded || !isSupabaseConfigured) return;
     
@@ -143,19 +125,13 @@ export default function App() {
       if (currentSession?.user) {
         fetchSettings();
         fetchProfile(currentSession.user.id, currentSession.user.email);
-      } else {
-        setLoading(false);
-      }
+      } else setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, curSession) => {
       setSession(curSession);
-      if (curSession?.user) {
-        fetchProfile(curSession.user.id, curSession.user.email);
-      } else {
-        setProfile(null);
-        setLoading(false);
-      }
+      if (curSession?.user) fetchProfile(curSession.user.id, curSession.user.email);
+      else { setProfile(null); setLoading(false); }
     });
 
     return () => subscription?.unsubscribe();
@@ -182,11 +158,7 @@ export default function App() {
       {!session ? (
         <Login showToast={showToast} closeToast={closeToast} supabase={supabase} />
       ) : (
-        <MainLayout 
-          session={session} profile={profile} appSettings={appSettings} 
-          showToast={showToast} closeToast={closeToast} supabase={supabase} 
-          refreshProfile={() => fetchProfile(session.user.id, session.user.email)} 
-        />
+        <MainLayout session={session} profile={profile} appSettings={appSettings} showToast={showToast} closeToast={closeToast} supabase={supabase} refreshProfile={() => fetchProfile(session.user.id, session.user.email)} />
       )}
     </div>
   );
@@ -208,7 +180,6 @@ function Login({ showToast, closeToast, supabase }) {
     
     if (error) showToast('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 'error'); 
     else closeToast();
-    
     setIsLoading(false);
   };
 
@@ -392,14 +363,16 @@ function TeacherPart1({ profile, appSettings, showToast, supabase, refreshProfil
     setIsSaving(true);
     showToast('กำลังบันทึก...', 'loading');
     
-    // 🚨 ส่งเฉพาะข้อมูลที่มีใน Table profiles จริงๆ ห้ามส่ง password
+    // 🛡️ ปรับเป็นการใช้ Upsert เพื่อให้สร้างแถวใหม่ได้ถ้ายูเซอร์คนนี้ยังไม่มีข้อมูลในตาราง profile
     const payload = {
+      id: profile.id, // บังคับส่ง ID ไปด้วย
+      email: profile.email,
       title: formData.title, first_name: formData.first_name, last_name: formData.last_name,
       salary: formData.salary, license_number: formData.license_number, license_issue: formData.license_issue, license_expire: formData.license_expire,
       classes: formData.classes, subjects: formData.subjects, hours1: formData.hours1, hours2: formData.hours2
     };
 
-    const { error } = await supabase.from('profiles').update(payload).eq('id', profile.id);
+    const { error } = await supabase.from('profiles').upsert(payload); // ใช้ upsert ตรงนี้
     if (error) showToast(error.message, 'error'); 
     else { showToast('บันทึกข้อมูลสำเร็จ', 'success'); refreshProfile(); }
     setIsSaving(false);
@@ -557,11 +530,36 @@ function AdminPanel({ profile, supabase, showToast }) {
       if (isManualAddMode) {
         if (!editFormData.email || !editFormData.password || editFormData.password.length < 6) throw new Error("ข้อมูลไม่ครบ หรือรหัสสั้นไป");
         
-        // 1. สร้างบัญชี (Auth) - ตรงนี้ส่ง password ได้ เพราะยิงไปที่ Auth system
+        // 1. สร้างบัญชี (Auth)
         const { data: authData, error: authErr } = await supabase.auth.signUp({ email: editFormData.email.trim(), password: editFormData.password });
-        if (authErr) throw authErr;
+        
+        // 🚨 ดักจับ Error ตรงนี้ให้ชัดๆ ว่าพังจาก Auth Trigger 🚨
+        if (authErr) {
+            console.error("Auth Error:", authErr);
+            if (authErr.message.includes('Database error saving new user')) {
+                const triggerFixHtml = `
+                  <div style="text-align: left; font-size: 14px; line-height: 1.5;">
+                    <p style="color: #d32f2f; font-weight: bold; margin-bottom: 8px;">พบปัญหา: ระบบฐานข้อมูลมี Trigger ซ่อนอยู่!</p>
+                    <p>Supabase ซ่อน Trigger ไว้ทำให้เรามองไม่เห็นในเมนูครับ กรุณาไปที่เมนู <b>SQL Editor</b> แล้ว <b>Copy โค้ดนี้ไปรัน (Run)</b> แทนครับ:</p>
+                    <div style="background: #2b2b2b; padding: 10px; border-radius: 8px; margin-top: 10px; font-family: monospace; font-size: 11px; color: #4af626; white-space: pre-wrap; word-break: break-all; text-align: left;">DO $$
+DECLARE
+  t record;
+BEGIN
+  FOR t IN SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = 'auth' AND event_object_table = 'users'
+  LOOP
+    EXECUTE 'DROP TRIGGER IF EXISTS ' || t.trigger_name || ' ON auth.users CASCADE;';
+  END LOOP;
+END $$;</div>
+                    <p style="margin-top: 10px; font-size: 12px; color: #666; font-weight: bold;">* หลังจากรันเสร็จเรียบร้อย ให้กดปุ่มบันทึกเพิ่มครูในหน้านี้อีกครั้งครับ</p>
+                  </div>
+                `;
+                showToast(null, 'error', triggerFixHtml);
+                return;
+            }
+            throw new Error(`ระบบ Auth แจ้งว่า: ${authErr.message}`);
+        }
 
-        // 2. บันทึกโปรไฟล์ - 🚨 ตรงนี้สำคัญมาก! ห้ามมีคอลัมน์ password 🚨
+        // 2. บันทึกโปรไฟล์ (Upsert)
         if (authData?.user) {
           const profilePayload = {
             id: authData.user.id, 
@@ -577,11 +575,12 @@ function AdminPanel({ profile, supabase, showToast }) {
             is_supervisor: false, 
             is_admin: false
           };
-          const { error: dbErr } = await supabase.from('profiles').insert(profilePayload);
-          if (dbErr) throw dbErr;
+          
+          const { error: dbErr } = await supabase.from('profiles').upsert([profilePayload]);
+          if (dbErr) throw new Error(`บันทึกข้อมูล Profile ไม่สำเร็จ: ${dbErr.message}`);
         }
       } else {
-        // กรณีแก้ไข: 🚨 ดึงเฉพาะฟิลด์ที่มีในฐานข้อมูลจริง 🚨
+        // กรณีแก้ไข
         const updatePayload = {
           title: editFormData.title || null, 
           first_name: editFormData.first_name || null, 
@@ -595,12 +594,14 @@ function AdminPanel({ profile, supabase, showToast }) {
           is_admin: editFormData.is_admin ?? false
         };
         const { error } = await supabase.from('profiles').update(updatePayload).eq('id', editFormData.id);
-        if (error) throw error;
+        if (error) throw new Error(`บันทึกการอัปเดตไม่สำเร็จ: ${error.message}`);
       }
       showToast('บันทึกสำเร็จ', 'success');
       setEditFormData(null);
       fetchUsers();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) { 
+        showToast(err.message, 'error'); 
+    }
   };
 
   if (!profile?.is_admin) return null;
@@ -637,7 +638,6 @@ function AdminPanel({ profile, supabase, showToast }) {
         </div>
       )}
 
-      {/* Modal จัดการข้อมูล */}
       {editFormData && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in-up">
           <div className="bg-white rounded-[2rem] w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -645,6 +645,15 @@ function AdminPanel({ profile, supabase, showToast }) {
                 <h3 className="font-bold text-lg">{isManualAddMode ? 'เพิ่มบัญชีผู้ใช้งานใหม่' : 'แก้ไขข้อมูล'}</h3>
                 <button onClick={()=>setEditFormData(null)} className="hover:bg-white/20 p-1 rounded-lg transition-colors"><X size={20}/></button>
              </div>
+             
+             {isManualAddMode && (
+                <div className="px-6 pt-4 pb-0">
+                   <div className="bg-orange-50 border border-orange-200 p-3 rounded-xl text-xs text-orange-800 font-bold">
+                      ⚠️ หมายเหตุ: การเพิ่มครูจากหน้านี้ ระบบ Auth ของ Supabase จะล็อกอินบัญชีใหม่ให้อัตโนมัติ (เมื่อเพิ่มเสร็จให้กดออกจากระบบ แล้วล็อกอินแอดมินใหม่อีกครั้งนะครับ)
+                   </div>
+                </div>
+             )}
+
              <div className="p-6 overflow-y-auto space-y-4 custom-scrollbar">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2"><label className="block text-xs font-bold text-gray-500 mb-1">อีเมลโรงเรียน</label><input type="email" value={editFormData.email||''} onChange={e=>setEditFormData({...editFormData, email: e.target.value})} disabled={!isManualAddMode} className={`w-full p-3 rounded-xl border font-bold ${!isManualAddMode ? 'bg-gray-100 text-gray-500 border-transparent' : 'bg-white focus:border-[#00529B] outline-none'}`} /></div>
@@ -652,7 +661,7 @@ function AdminPanel({ profile, supabase, showToast }) {
                   <div className="col-span-2 md:col-span-1"><label className="block text-xs font-bold text-gray-500 mb-1">คำนำหน้า</label><input type="text" value={editFormData.title||''} onChange={e=>setEditFormData({...editFormData, title: e.target.value})} className="w-full p-3 rounded-xl border font-bold focus:border-[#00529B] outline-none" placeholder="เช่น นาย, นาง"/></div>
                   <div className="col-span-2 md:col-span-1"><label className="block text-xs font-bold text-gray-500 mb-1">ชื่อ</label><input type="text" value={editFormData.first_name||''} onChange={e=>setEditFormData({...editFormData, first_name: e.target.value})} className="w-full p-3 rounded-xl border font-bold focus:border-[#00529B] outline-none" /></div>
                   <div className="col-span-2 md:col-span-1"><label className="block text-xs font-bold text-gray-500 mb-1">นามสกุล</label><input type="text" value={editFormData.last_name||''} onChange={e=>setEditFormData({...editFormData, last_name: e.target.value})} className="w-full p-3 rounded-xl border font-bold focus:border-[#00529B] outline-none" /></div>
-                  <div className="col-span-2"><label className="block text-xs font-bold text-gray-500 mb-1">กลุ่มสาระฯ</label><select value={editFormData.department||''} onChange={e=>setEditFormData({...editFormData, department: e.target.value})} className="w-full p-3 rounded-xl border font-bold focus:border-[#00529B] outline-none"><option value="">-- เลือก --</option>{DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
+                  <div className="col-span-2"><label className="block text-xs font-bold text-gray-500 mb-1">กลุ่มสาระฯ/กลุ่มงาน</label><select value={editFormData.department||''} onChange={e=>setEditFormData({...editFormData, department: e.target.value})} className="w-full p-3 rounded-xl border font-bold focus:border-[#00529B] outline-none"><option value="">-- เลือก --</option>{DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
                 </div>
                 {!isManualAddMode && (
                   <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 flex gap-4">
